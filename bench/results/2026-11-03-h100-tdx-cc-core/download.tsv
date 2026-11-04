@@ -1,0 +1,8 @@
+q8b	model.safetensors.index.json	OK	32878 bytes	0s download	0s total
+q8b	config.json	OK	728 bytes	0s download	0s total
+q8b	LICENSE	OK	11343 bytes	0s download	0s total
+q8b	model-00005-of-00005.safetensors	OK	1244659840 bytes	11s download	12s total
+q8b	model-00004-of-00005.safetensors	OK	3187841392 bytes	24s download	26s total
+q8b	model-00001-of-00005.safetensors	OK	3996250744 bytes	47s download	50s total
+q8b	model-00002-of-00005.safetensors	OK	3993160032 bytes	49s download	52s total
+q8b	model-00003-of-00005.safetensors	OK	3959604768 bytes	61s download	63s total

@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# The fake VM's sudo: no root in a test, the command runs as this user. A
+# builtin (`kill`: the CI image has no /usr/bin/kill) runs here; anything else
+# replaces this process, so its pid is the one the recipe saw.
+[ "${1:-}" = -E ] && shift
+[ "$(type -t "${1:-}")" = builtin ] && { "$@"; exit; }
+exec "$@"

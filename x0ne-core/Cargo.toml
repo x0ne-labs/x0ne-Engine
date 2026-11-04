@@ -1,0 +1,23 @@
+# The two crates of x0ne Core that x0ne Engine serves with, copied unchanged
+# (PROVENANCE.md). Not members of the Engine workspace: the kernels are
+# compiled by nvcc, which the default build and its CI do not have. This
+# manifest is Engine's: x0ne Core's workspace values, with the license of
+# the server (LICENSING.md) and only the two crates as members.
+[workspace]
+resolver = "2"
+members = ["kernels", "runtime"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.98"
+authors = ["x0ne"]
+license = "AGPL-3.0-only"
+publish = false
+
+[workspace.dependencies]
+half = { version = "=2.7.1", default-features = false, features = ["std"] }
+memmap2 = "=0.9.11"
+safetensors = "=0.8.0"
+serde_json = "=1.0.151"
+sha2 = "=0.10.9"

@@ -1,0 +1,21 @@
+[package]
+name = "x0ne-confidential"
+description = "x0ne Engine's attestation vocabulary: bounded capability leases and the confidential-runtime model (workload identity, attestation evidence, verification policy, attestation-bound key release, receipts)."
+version.workspace = true
+edition.workspace = true
+license = "Apache-2.0"
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords = ["confidential", "attestation", "tee", "tdx", "receipt"]
+categories = ["cryptography"]
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lints]
+workspace = true

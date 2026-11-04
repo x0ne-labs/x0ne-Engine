@@ -1,0 +1,18 @@
+# cargo-about: generates THIRD_PARTY_LICENSES.html (scripts/third-party-licenses.sh).
+# Same allow list as deny.toml; cargo deny is the check, this is the attribution.
+# x0ne's own crates (publish = false) are no third party: LICENSE, LICENSING.md
+# and NOTICE carry their licenses, so the list below stays the third parties' one.
+private = { ignore = true }
+accepted = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0",
+]

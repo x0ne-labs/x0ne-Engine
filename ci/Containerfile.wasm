@@ -1,0 +1,15 @@
+# The wasm32 build of x0ne-sdk and its Node smoke test (scripts/sdk-wasm.sh):
+# the CI image (ci/Containerfile, passed as CI_IMAGE), the wasm32-unknown-unknown
+# standard library of the same toolchain, and Node from the official image, by digest.
+# Building this image is the only step with network; the runs have none.
+ARG CI_IMAGE
+# node:22-slim (Node 22.23.3, bookworm like the CI image), pulled 2026-09-23.
+ARG NODE_IMAGE=docker.io/library/node:22-slim@sha256:25330af3531fb5e23318554a0aa911125b6e91b1b777edf7655501d207c067a2
+
+FROM ${NODE_IMAGE} AS node
+
+FROM ${CI_IMAGE}
+RUN rustup target add wasm32-unknown-unknown --toolchain 1.98.1
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+LABEL org.opencontainers.image.title="x0ne-engine-sdk-wasm" \
+      org.opencontainers.image.description="x0ne-sdk for wasm32-unknown-unknown, and Node to run it against the simulated TD. No network at run time."

@@ -1,0 +1,192 @@
+name: Release
+
+# On a signed tag vX.Y.Z: build the release binaries twice on two runners,
+# refuse if the two builds differ, then attach binaries (stripped, as in the
+# .deb), their debug files, SHA256SUMS and the CycloneDX SBOMs to a DRAFT
+# release with SLSA provenance. A maintainer
+# reviews and publishes the draft by hand. Nothing goes to crates.io.
+on:
+  push:
+    tags: ["v*"]
+
+permissions: {}
+
+# Never cancel a release half-way.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Same compiler as rust-toolchain.toml; image pinned by index digest, so a
+  # rebuild anywhere uses the same toolchain, libc and paths (/build).
+  BUILD_IMAGE: docker.io/library/rust:1.98.1-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e
+  TARGET: x86_64-unknown-linux-gnu
+
+jobs:
+  verify-tag:
+    name: verify-tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # GitHub marks a tag "verified" only if it is annotated and signed by a
+      # key registered on the tagger's account. A lightweight or unsigned tag stops here.
+      - name: Tag is annotated and its signature verified by GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          obj=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" --jq '.object.type + " " + .object.sha')
+          read -r type sha <<< "$obj"
+          if [ "$type" != tag ]; then echo "::error::${TAG} is a lightweight tag"; exit 1; fi
+          verdict=$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${sha}" --jq '(.verification.verified | tostring) + " " + .verification.reason')
+          echo "signature: ${verdict}"
+          if [ "${verdict%% *}" != true ]; then echo "::error::${TAG} is not signed by a verified key"; exit 1; fi
+      - name: Tag equals the workspace version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -n 1)
+          if [ "v${version}" != "${TAG}" ]; then echo "::error::tag ${TAG} but Cargo.toml says ${version}"; exit 1; fi
+
+  build:
+    name: build (${{ matrix.attempt }})
+    needs: verify-tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        # Two independent builds; `reproducible` compares them.
+        attempt: [first, second]
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # scripts/sbom.sh: one CycloneDX SBOM per crate; the client side of the
+      # attested path, the binaries of the .deb (`x0ne-engine`, `x0ne-engine-cloud`,
+      # `x0ne-engine-proxy`), built with cargo-auditable (dependency list embedded).
+      # No x0ne-infer: the TD's server needs x0ne Core (cuda, nvcc) and ships in
+      # the CVM image only (2026-11-04).
+      # SOURCE_DATE_EPOCH = commit time: a build script reading the clock would
+      # otherwise make every build different.
+      - name: Build in the pinned image
+        run: |
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct); export SOURCE_DATE_EPOCH
+          docker run --rm -v "$GITHUB_WORKSPACE:/build" -w /build -e SOURCE_DATE_EPOCH \
+            -e CARGO_TARGET_DIR=/build/target -e CARGO_INCREMENTAL=0 "$BUILD_IMAGE" \
+            bash -euo pipefail -c '
+              cargo install --locked cargo-cyclonedx@0.5.9 cargo-auditable@0.7.7
+              scripts/sbom.sh /build/out'
+      - name: Package
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          epoch=$(git log -1 --format=%ct)
+          name="x0ne-engine-${TARGET}"
+          mkdir -p "dist/${name}"
+          cp out/x0ne-engine out/x0ne-engine-cloud out/x0ne-engine-proxy \
+            LICENSE LICENSING.md NOTICE THIRD_PARTY_LICENSES.html "dist/${name}/"
+          # Deterministic archive: sorted, fixed owner and mtime, no gzip timestamp.
+          tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@${epoch}" \
+            -C dist -cf - "${name}" | gzip -n > "dist/${name}.tar.gz"
+          rm -rf "dist/${name}"
+          # The debug files of the stripped binaries, by build-id (ci/strip-release.sh):
+          # gdb -iex 'set debug-file-directory <unpacked>/debug'.
+          tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@${epoch}" \
+            -C out -cf - debug | gzip -n > "dist/${name}-debug.tar.gz"
+          cp out/*.cdx.json dist/
+          (cd out && sha256sum x0ne-engine x0ne-engine-cloud x0ne-engine-proxy) > dist/binaries.sha256
+          ls -l dist
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist-${{ matrix.attempt }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  reproducible:
+    name: reproducible
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: dist-*
+      # The binaries and the archive must be bit-for-bit identical. The SBOMs
+      # are not compared: they carry a serial number and a timestamp.
+      - run: |
+          set -euo pipefail
+          diff dist-first/binaries.sha256 dist-second/binaries.sha256
+          cmp "dist-first/x0ne-engine-${TARGET}.tar.gz" "dist-second/x0ne-engine-${TARGET}.tar.gz"
+          cmp "dist-first/x0ne-engine-${TARGET}-debug.tar.gz" "dist-second/x0ne-engine-${TARGET}-debug.tar.gz"
+          cat dist-first/binaries.sha256
+
+  release:
+    name: release
+    needs: reproducible
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write # create the draft release
+      id-token: write # sign the provenance (Sigstore, GitHub OIDC)
+      attestations: write # store the provenance
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist-first
+          path: dist
+      - name: SHA256SUMS
+        run: |
+          set -euo pipefail
+          rm dist/binaries.sha256
+          (cd dist && sha256sum -- *.tar.gz *.cdx.json > SHA256SUMS && sha256sum -c SHA256SUMS)
+      # Verify with: gh attestation verify <file> --repo <owner>/x0ne-Engine
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.cdx.json
+            dist/SHA256SUMS
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          # Release notes = the CHANGELOG section of this version, if present:
+          # "## 0.2.0-beta.3 — <date>" (this file) or "## [0.2.0]".
+          awk -v v="$version" '
+            index($0, "## [" v "]") == 1 || index($0, "## " v " ") == 1 || $0 == "## " v {on=1; next}
+            on && /^## / {exit}
+            on {print}' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "See CHANGELOG.md." > notes.md
+          pre=""
+          case "$TAG" in *-*) pre="--prerelease" ;; esac
+          gh release create "$TAG" --draft --verify-tag $pre \
+            --repo "$GITHUB_REPOSITORY" --title "$TAG" --notes-file notes.md dist/*

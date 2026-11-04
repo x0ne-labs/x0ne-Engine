@@ -1,0 +1,32 @@
+# Reviewed occurrences of a phrase of tests/public_claims.rs that are not the
+# promise its rule names. One per line, four fields separated by one tab:
+# rule, file (relative to the workspace), an excerpt of the text around the
+# occurrence, and why it is not that promise. The excerpt holds at least
+# three words beside the phrase and is found once in its file; case, dashes,
+# line breaks and markup do not matter. An entry that covers no occurrence
+# fails the test.
+end-to-end	docs/attested-channel.md	The path is not end-to-end confidential: [docs/cloud.md](cloud.md#what-not-end-to-end-confidential-covers)	a negation, and the anchor of the section that details it
+end-to-end	README.md	Today, this is **not end-to-end confidential**, and the cloud path	a negation
+end-to-end	FEATURES.md	Not end-to-end confidential: the host still sees timing, sizes and the model name	a negation
+end-to-end	docs/cloud.md	This is **not end-to-end confidential**: see [what that covers](#what-not-end-to-end-confidential-covers)	a negation, and the anchor of the section that details it
+end-to-end	docs/cloud.md	## What "not end-to-end confidential" covers	the heading of the section that details the negation
+end-to-end	docs/cloud.md	End-to-end would mean encrypted from the application you type into	defines what is not provided
+end-to-end	x0ne-infer/THREAT_MODEL.md	a TCP forwarder that cuts mid-stream, end to end;	how a test ran, not a confidentiality claim
+end-to-end	x0ne-infer/tests/VENDORED.md	Used by the simulated end-to-end tests	the name of a test suite
+per-request-isolation	docs/verification.md	a constant written in the code (`Isolation::NONE_OF_IT`), not a measurement taken per request	a negation
+hardware-binding	x0ne-infer/THREAT_MODEL.md	**CPU↔GPU hardware binding on Hopper**: the TDX quote	an item of "Explicitly OUT": the binding is not provided
+hardware-binding	x0ne-infer/THREAT_MODEL.md	not by a hardware cross-signature (Hopper has none)	a negation
+unmeasured-performance	docs/related-work.md	expect this to be **several times slower** on any workload with concurrency	an unmeasured expectation against this engine, said to be unmeasured in the same paragraph
+unmeasured-performance	x0ne-infer/THREAT_MODEL.md	when the text comes faster than about 3 KB/s serialized	a rate of text in a stream, not a performance claim
+verified-release-image	x0ne-infer/THREAT_MODEL.md	reproducible builds + Sigstore provenance + published measurements | written, not exercised	the row says it is written and not exercised
+operator-blind	x0ne-infer/THREAT_MODEL.md	only if that key reaches the guest by a channel the host cannot read	a condition sealing needs, not a statement that the host cannot read
+end-to-end	x0ne-infer/THREAT_MODEL.md	end to end, a stream asked behind a whole answer	how a test ran, not a confidentiality claim
+operator-blind	x0ne-infer/docs/oblivious-tokenizer.md	so "the host cannot read your prompt by software" is not yet true for the tokenization phase	a negation: the quoted claim is said not to hold during tokenization
+verified-release-image	x0ne-infer/docs/oblivious-tokenizer.md	`oblivious_tokens_equal_the_stock_tokenizer_bit_for_bit`,	the name of a test that compares token ids on the fixture, not a claim about a release image
+post-quantum	x0ne-ohttp/README.md	HKDF-SHA256) and X-Wing (ML-KEM-768 + X25519). One symmetric suite	a measured fact: the prototype crate offers X-Wing, round trip tested (tests/relay_gateway.rs); no x0ne binary uses the crate
+end-to-end	docs/sdk-e2e.md	the README says: the product is not end-to-end confidential today	a negation
+post-quantum	docs/sdk-e2e.md	9. A hybrid post-quantum KEM, not implemented: the SDK seals with	an item of what is left, said not implemented in the same line
+end-to-end	x0ne-infer/tests/VENDORED.md	own test Google (`gce_endorsement::tests::fake_google`) endorses it for the simulated end-to-end tests	the name of a test suite
+end-to-end	docs/model-key.md	This document does not make the cloud session > end-to-end confidential	a negation
+end-to-end	README.md	x0ne Engine is not end-to-end confidential yet, and the cloud	a negation
+end-to-end	bench/results/2026-11-04-h100-tdx-cc-core-e2e/README.md	x0ne Engine is not end-to-end confidential yet.	a negation, the README's

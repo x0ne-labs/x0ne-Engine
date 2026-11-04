@@ -1,0 +1,7 @@
+# Install check for `make deb-check` (ci/ci.sh): the trixie-slim of x0ne-OS
+# tests/pins.sh plus the Depends of packages/x0ne-engine.ctl, fetched here so
+# that `dpkg -i` runs with no network. apt packages not snapshot pinned.
+FROM docker.io/library/debian:trixie-slim@sha256:918311b7b6c4c6f68b232ba516584925f6c78ad82b6fd534b98979df6438e483
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates libstdc++6 libgcc-s1 \
+ && rm -rf /var/lib/apt/lists/*

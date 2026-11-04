@@ -1,0 +1,7 @@
+# diffoscope for `make deb-repro` (ci/ci.sh): explains a non-reproducible .deb.
+# Built only when two builds of the same commit differ. Base by digest (the
+# trixie-slim of x0ne-OS tests/pins.sh); apt packages not snapshot pinned.
+FROM docker.io/library/debian:trixie-slim@sha256:918311b7b6c4c6f68b232ba516584925f6c78ad82b6fd534b98979df6438e483
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends diffoscope-minimal binutils xz-utils \
+ && rm -rf /var/lib/apt/lists/*

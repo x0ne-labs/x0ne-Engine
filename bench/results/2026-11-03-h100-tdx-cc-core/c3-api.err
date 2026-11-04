@@ -1,0 +1,54 @@
+engine: NVIDIA H100 80GB HBM3 (cc 9.0, 132 SMs, cubin sm_90a), driver 13020, cuBLAS 130400, arena 22836026400 bytes, decode graph 439 nodes, decode attention split-K P 49 (grid 8 x 49, 4 q heads per block, 3 blocks per SM, merge Kernel), feed-forward dense
+MEASURE qwen3_8b s20 prompt 20 session vs greedy: common prefix 256 of 256
+MEASURE qwen3_8b s31 prompt 31 session vs greedy: common prefix 256 of 256
+MEASURE qwen3_8b 4k prompt 3827 session vs greedy: common prefix 256 of 256
+MEASURE qwen3_8b 8k prompt 7926 session vs greedy: common prefix 256 of 256
+MEASURE qwen3_8b 16k prompt 16120 session vs greedy: common prefix 256 of 256
+MEASURE qwen3_8b s31 logits after 0 steps: 0 of 151936 values differ
+MEASURE qwen3_8b s31 logits after 1 steps: 0 of 151936 values differ
+MEASURE qwen3_8b s31 logits after 16 steps: 0 of 151936 values differ
+MEASURE qwen3_8b 4k logits after 0 steps: 0 of 151936 values differ
+MEASURE qwen3_8b 4k logits after 1 steps: 0 of 151936 values differ
+MEASURE qwen3_8b 4k logits after 16 steps: 0 of 151936 values differ
+MEASURE qwen3_8b short session route seconds 0.71
+MEASURE qwen3_8b short session kl_mean 9.5615e-5 kl_p99 2.0318e-3 kl_max 2.0318e-3 rows 84
+MEASURE qwen3_8b 4k session route seconds 32.16
+MEASURE qwen3_8b 4k session kl_mean 4.3415e-5 kl_p99 6.3433e-4 kl_max 6.3433e-4 rows 86
+MEASURE qwen3_8b short session perplexity 11.792753 reference 11.814904 rel -1.8748e-3
+MEASURE qwen3_8b 4k session perplexity 2.083720 reference 2.083034 rel 3.2887e-4
+MEASURE qwen3_8b short session top1_agreement 1.000000
+MEASURE qwen3_8b 4k session top1_agreement 0.994251
+MEASURE qwen3_8b 1000 sessions seconds 34.2 free_bytes 60817866752 drift []
+
+thread 'x3_scrub_on_every_path' (1942) panicked at crates/runtime/tests/api_suite/mod.rs:366:9:
+a caller panics with the session open
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/std/src/panicking.rs:679:5
+   1: core::panicking::panic_fmt
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/core/src/panicking.rs:80:14
+   2: api_model_8b::api_suite::x3_scrub_on_every_path::{closure#3}
+             at /mnt/bench/probes/kit/core/crates/runtime/tests/api_suite/mod.rs:366:9
+   3: <api_model_8b::api_suite::x3_scrub_on_every_path::{closure#3} as core::ops::function::FnOnce<()>>::call_once
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/core/src/ops/function.rs:250:5
+   4: <core::panic::unwind_safe::AssertUnwindSafe<api_model_8b::api_suite::x3_scrub_on_every_path::{closure#3}> as core::ops::function::FnOnce<()>>::call_once
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/core/src/panic/unwind_safe.rs:275:9
+   5: std::panicking::catch_unwind::do_call::<core::panic::unwind_safe::AssertUnwindSafe<api_model_8b::api_suite::x3_scrub_on_every_path::{closure#3}>, ()>
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/std/src/panicking.rs:576:43
+   6: std::panicking::catch_unwind::<(), core::panic::unwind_safe::AssertUnwindSafe<api_model_8b::api_suite::x3_scrub_on_every_path::{closure#3}>>
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/std/src/panicking.rs:544:19
+   7: std::panic::catch_unwind::<core::panic::unwind_safe::AssertUnwindSafe<api_model_8b::api_suite::x3_scrub_on_every_path::{closure#3}>, ()>
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/std/src/panic.rs:359:14
+   8: api_model_8b::api_suite::x3_scrub_on_every_path
+             at /mnt/bench/probes/kit/core/crates/runtime/tests/api_suite/mod.rs:362:19
+   9: api_model_8b::x3_scrub_on_every_path
+             at /mnt/bench/probes/kit/core/crates/runtime/tests/api_suite/mod.rs:607:57
+  10: api_model_8b::x3_scrub_on_every_path::{closure#0}
+             at /mnt/bench/probes/kit/core/crates/runtime/tests/api_suite/mod.rs:607:54
+  11: <api_model_8b::x3_scrub_on_every_path::{closure#0} as core::ops::function::FnOnce<()>>::call_once
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/core/src/ops/function.rs:250:5
+  12: <fn() -> core::result::Result<(), alloc::string::String> as core::ops::function::FnOnce<()>>::call_once
+             at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/core/src/ops/function.rs:250:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+MEASURE qwen3_8b session counts steps=8 Counts { kernel_launches: 182, graph_launches: 8, gemms: 145, htod: 11, dtoh: 9, memsets: 17, syncs: 19 }
+MEASURE qwen3_8b session counts steps=40 Counts { kernel_launches: 182, graph_launches: 40, gemms: 145, htod: 43, dtoh: 41, memsets: 17, syncs: 19 }

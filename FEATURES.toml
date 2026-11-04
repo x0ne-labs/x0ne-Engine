@@ -1,0 +1,1066 @@
+# FEATURES.toml: the feature list of x0ne Engine, read by ci/features.py (FEATURES.md, make ci)
+# and by the x0ne.co site. One [[feature]] per entry. Titles and sentences are written for a
+# reader of the site: plain words; the technical names stay in proof, figure and limit.
+#
+# level: hardware (exercised on a TDX VM, in a run docs/hardware-runs.md dates), local (tests,
+# CI or a machine without a TEE), prototype (code present, off the served path), planned
+# (announced, not built), retired (replaced_by names the successor).
+# since: the first proof (CHANGELOG, doc or test). hardware_since: the first run on real
+# hardware that exercised it, a date of docs/hardware-runs.md. order: rank within its level.
+
+# ---------------------------------------------------------------- hardware
+
+[[feature]]
+id = "attested-relay-path"
+level = "hardware"
+order = 1
+since = "2026-10-12"
+hardware_since = "2026-10-14"
+version = "0.2.0-beta.2"
+title_en = "The VM is verified before each question"
+sentence_en = "A relay on your machine checks the VM's hardware proof before any question or key leaves your computer."
+figure = "relay verdict in 1.2 s, key released and model ready 2.4 s later (2026-10-14); 10 recorded runs"
+proof = "CHANGELOG 2026-10-12 (the attested channel); docs/hardware-runs.md, runs of 2026-10-14, 10-17, 10-18, 10-22, 10-25, 10-28, 10-30, 10-31, 11-01 and 11-04; README (VERIFIED on 10-18 qwen3:32b, 10-25 qwen3:0.6b, 10-28 ministral3:14b)"
+limit = "Test relay only: debug assertions, TEST archive key and TEST log; no release key pinned, no published image. Not confidential against the host, which still sees timing, sizes and the model name."
+
+[[feature]]
+id = "sdk-caller-sealed-path"
+level = "hardware"
+order = 2
+since = "2026-10-22"
+hardware_since = "2026-10-28"
+version = "prototype"
+title_en = "Your question is sealed on your machine"
+sentence_en = "The SDK, on your machine, verifies the VM, seals the question to the VM's key and checks the receipt. Prototype."
+figure = "key document verified in 1.28 to 1.75 s on TDX (2026-10-30); 4,151 bytes sent, 32,800 received"
+proof = "docs/sdk-e2e.md (prototype 2026-10-22, TD routes 10-26, through the relay 10-28); docs/hardware-runs.md 2026-10-28 (one bit flipped is a 400), 10-30, 10-31, 11-01 (the answer streamed), 11-04 (on x0ne Core)"
+limit = "Prototype (LIMITATIONS in docs/sdk-e2e.md): the caller's clock, no multi-turn through the relay, TEST key and TEST log; the relay still sees sizes and timing."
+
+[[feature]]
+id = "signed-receipts-v1"
+level = "hardware"
+order = 4
+since = "2026-09-18"
+hardware_since = "2026-10-17"
+version = "pre-beta"
+title_en = "A signed receipt with every answer"
+sentence_en = "Every answer carries a receipt signed inside the VM, binding the question and the answer; the relay verifies it."
+proof = "CHANGELOG 2026-09-18 (receipt protocol v1); docs/verification.md (receipts); docs/hardware-runs.md 2026-10-17 onward (receipts verified by the relay)"
+limit = "Receipts signed before 2026-09-18 do not verify; the relay does not check that a receipt answers the request it forwarded (docs/limitations.md)."
+
+[[feature]]
+id = "rtmr0-gce-endorsed"
+level = "hardware"
+order = 5
+since = "2026-10-22"
+hardware_since = "2026-10-31"
+version = "0.2.0-beta.7"
+title_en = "The whole boot is pinned, firmware included"
+sentence_en = "Your machine fetches the firmware Google signed for the VM and requires its 16 boot events, identical over 3 boots."
+figure = "16 RTMR0 events, identical over the boots of 2026-10-14, 10-17 and 10-30"
+proof = "CHANGELOG 0.2.0-beta.7 (gce-endorsed, 2026-10-22); docs/hardware-runs.md 2026-10-31 (RTMR0 pinned, x0ne-cvm 0.2.8)"
+limit = "Published references were of policy report until 0.2.8 (TEST-signed, not published); since 2026-10-31 the relay refuses a report reference (104)."
+
+[[feature]]
+id = "conversation-kv-cache"
+level = "prototype"
+order = 12
+since = "2026-10-30"
+version = "0.2.0-beta.7"
+title_en = "A conversation keeps its memory between turns"
+sentence_en = "The engine before x0ne Core kept a conversation's working memory under a single-use handle, so a follow-up did not recompute it."
+proof = "docs/session-kv-cache.md; docs/hardware-runs.md 2026-10-31 (the engine before x0ne Core); on x0ne Core: none kept, a 400 (the default generate_turn, x0ne-infer/src/backend.rs; tests a_conversation_is_refused_by_name_and_its_handle_never_quoted and a_model_that_keeps_no_conversation_refuses_one_on_the_sealed_stream)"
+limit = "Not in the served build: x0ne Core keeps no conversation, and a request that asks for one gets a 400. Measured on an H100 in a TDX VM on 2026-10-31 with the engine before x0ne Core (a 16.5k-token follow-up in 0.472 s, 8.872 s without). What a kept conversation reveals to the host is in docs/limitations.md."
+
+[[feature]]
+id = "tcb-policy-transparent-strict"
+level = "hardware"
+order = 7
+since = "2026-10-28"
+hardware_since = "2026-10-28"
+version = "0.2.0-beta.7"
+title_en = "Unpatched Intel flaws are named, or refused"
+sentence_en = "In transparent mode the relay names the host's unpatched Intel advisories in each verdict and receipt; strict mode refuses the host."
+figure = "3 strict refusals recorded, 0.29 USD each"
+proof = "CHANGELOG 0.2.0-beta.7 (TCB transparent, 2026-10-28); docs/hardware-runs.md 2026-10-28 (ministral3:14b VERIFIED under transparent, refused 76 under strict), 2026-10-30 and 10-31 (strict VMs refused)"
+limit = "The Google a3 hosts of the runs are below Intel's current level: strict has never served on hardware."
+
+[[feature]]
+id = "cuda-inference-in-td"
+level = "hardware"
+order = 8
+since = "2026-10-17"
+hardware_since = "2026-11-04"
+version = "0.2.0-beta.7"
+title_en = "GPU inference inside the confidential VM"
+sentence_en = "x0ne Core serves the model on the GPU inside the confidential VM, through this Engine: a test run on an H100, not a release."
+figure = "qwen3:8b on an H100 in CC mode, through this Engine and the relay: 136.87 tok/s after 58 prompt tokens (TEST); x0ne Core alone, its own bench: 138.62 tok/s after 20"
+proof = "docs/hardware-runs.md 2026-11-04 (this Engine on x0ne Core, VERIFIED under transparent, a TEST measurement; earlier that day up refused the run's test relay, exit 95) and 2026-11-03 (x0ne Core alone, bench image, CC mode); bench/results/2026-11-04-h100-tdx-cc-core-e2e; bench/results/2026-11-03-h100-tdx-cc-core; the runs of 2026-10-17 to 2026-11-01 served on the engine before x0ne Core"
+limit = "One run through this Engine, a TEST measurement: TEST archive key and TEST log, up from an earlier build; a release relay waits for the signing ceremony. qwen3:8b only on that path; under strict the SDK refused this host (76). Qwen3 dense in BF16 only; one GPU, no MIG, no multi-GPU run."
+
+[[feature]]
+id = "tdx-quote-verification-live-pcs"
+level = "hardware"
+order = 9
+since = "2026-08-21"
+hardware_since = "2026-10-14"
+version = "pre-beta"
+title_en = "The hardware proof is checked up to Intel's root"
+sentence_en = "The VM's proof chains to Intel's pinned root; the host's security level and signer are checked live, and refused on doubt."
+figure = "register offsets fixed on 2026-09-23"
+proof = "CHANGELOG 2026-08-21, 2026-08-22 (validity windows, TCB signing certificate); docs/hardware-runs.md (the DCAP and collateral verifiers replayed on the genuine quote of 2026-10-18, vendored); tests/tdx_layout_live.rs"
+limit = "UpToDate and SWHardeningNeeded both accepted; Google's pinned root not checked against its validity window; the OCSP responses about NVIDIA's signing chain are judged since 2026-10-31, and no TD staples them yet."
+
+[[feature]]
+id = "tdx-module-verification"
+level = "hardware"
+order = 10
+since = "2026-10-13"
+hardware_since = "2026-10-14"
+version = "0.2.0-beta.2"
+title_en = "Intel's trusted module is identified"
+sentence_en = "The signer, attributes and version of Intel's TDX module are checked against Intel's published identities; an unknown module is refused."
+proof = "CHANGELOG 2026-10-13 (attack of 2026-10-12: three fixes); CHANGELOG 0.2.0-beta.7 (TcbRejected::ModuleUnknown); exercised at every relay verdict since 2026-10-14"
+limit = "ModuleUnknown and ModuleBelowEveryLevel tested on synthetic collateral only."
+
+[[feature]]
+id = "client-challenge-nonce"
+level = "hardware"
+order = 11
+since = "2026-10-13"
+hardware_since = "2026-10-14"
+version = "0.2.0-beta.2"
+title_en = "A fresh challenge from your machine"
+sentence_en = "Your machine draws the challenge the VM's proof must answer, so a recorded proof cannot be replayed."
+proof = "CHANGELOG 2026-10-13 (client challenge); the relay's client nonce is the exporter context of every run since 2026-10-14"
+limit = "The NVIDIA token answered the boot nonce until binding v4 (2026-10-22)."
+
+[[feature]]
+id = "session-quote-per-connection"
+level = "hardware"
+order = 12
+since = "2026-10-13"
+hardware_since = "2026-10-14"
+version = "0.2.0-beta.2"
+title_en = "One hardware proof per connection"
+sentence_en = "Every encrypted connection carries its own hardware proof, bound to that connection; a stolen connection key yields nothing."
+figure = "check 0.45 ms, new checked connection 1.4 to 2.1 ms on the loopback (2026-10-13, synthetic)"
+proof = "CHANGELOG 2026-10-13 (one quote per TLS connection, binding v3); docs/hardware-runs.md 2026-10-14 onward"
+limit = "The real cost of a TDX quote per connection is not measured on hardware."
+
+[[feature]]
+id = "tls13-aes-gcm-no-resumption"
+level = "hardware"
+order = 13
+since = "2026-10-13"
+hardware_since = "2026-10-14"
+version = "0.2.0-beta.2"
+title_en = "One strict encryption setting, no shortcuts"
+sentence_en = "The channel offers two TLS 1.3 settings only, no session resumption and no early data: one connection, one proof."
+proof = "CHANGELOG 2026-10-13 (downgrade, diversion; one full handshake per connection); measured on the wire against rustls defaults; the channel of every run since 2026-10-14"
+limit = "Copies that ring and rustls make while parsing the TLS key are outside the protected memory."
+
+[[feature]]
+id = "image-reference-signature"
+level = "hardware"
+order = 14
+since = "2026-10-17"
+hardware_since = "2026-10-18"
+version = "0.2.0-beta.5"
+title_en = "The image reference is signed, checked before reading"
+sentence_en = "The relay checks the reference's detached signature by the pinned archive key before parsing it; otherwise it stops (99)."
+proof = "CHANGELOG 0.2.0-beta.5; docs/hardware-runs.md 2026-10-18 (reference signed by the TEST key, VERIFIED); measurements/0.2.0-beta.7.json, provenance test-archive-key"
+limit = "This source tree pins no release archive key: a release build refuses every reference; only the TEST key is pinned, in debug builds."
+
+[[feature]]
+id = "ccel-closed-list-reference"
+level = "hardware"
+order = 15
+since = "2026-10-13"
+hardware_since = "2026-10-17"
+version = "0.2.0-beta.5"
+title_en = "The boot log is replayed against a closed list"
+sentence_en = "The VM's boot log is replayed; every event of the measured boot must be on the image reference's closed lists."
+figure = "13 adversarial boot-log changes refused (2026-10-17)"
+proof = "CHANGELOG 2026-10-13 (CCEL policy closed list), 0.2.0-beta.5 (reference v2, thirteen RTMR1 changes refused); docs/hardware-runs.md 2026-10-17 and 10-18 (logs pass)"
+limit = "The reference and the measurements of the runs are signed by the TEST key."
+
+[[feature]]
+id = "published-measurements-pinned"
+level = "hardware"
+order = 16
+since = "2026-10-13"
+hardware_since = "2026-10-14"
+version = "0.2.0-beta.2"
+title_en = "Each version pins its own boot measurements"
+sentence_en = "Each version embeds and pins its measurements file; a release with nothing to pin refuses to serve (87)."
+figure = "beta.7: the measurements of 2026-10-18 equal what x0ne OS predicted"
+proof = "CHANGELOG 2026-10-13 (published measurements), 0.2.0-beta.3 (beta.2 run registers), beta.5, beta.7; docs/pinning.md; docs/hardware-runs.md 2026-10-14 (recorded in one pass, matched when pinned in the next)"
+limit = "Provenance test-archive-key, release false, until the signing ceremony; cloud mode pins the image reference instead."
+
+[[feature]]
+id = "google-launch-endorsement-mrtd"
+level = "hardware"
+order = 17
+since = "2026-10-12"
+hardware_since = "2026-10-14"
+version = "0.2.0-beta.2"
+title_en = "The firmware must be one Google signed"
+sentence_en = "The VM's firmware measurement must appear in Google's signed list of endorsed firmware for that machine type."
+proof = "CHANGELOG 2026-10-12; docs/pinning.md (RTMR0 and Google's firmware); every run since 2026-10-14"
+limit = "Trusts Google's firmware and root; the root's validity window is not checked."
+
+[[feature]]
+id = "nras-per-gpu-ueid"
+level = "hardware"
+order = 18
+since = "2026-09-18"
+hardware_since = "2026-10-14"
+version = "pre-beta"
+title_en = "NVIDIA's verdict names the exact GPU"
+sentence_en = "Each GPU token from NVIDIA's attestation service is verified under the pinned chain and must name the serial of the local GPU."
+figure = "production tokens of 3 runs matched"
+proof = "CHANGELOG 2026-09-18 (per-GPU tokens, ueid); CHANGELOG 0.2.0-beta.7 (the ueid limitation names the runs); x0ne-infer/tests/nras_live/"
+limit = "NVIDIA signing chain revocation judged from stapled OCSP responses since 2026-10-31, none stapled by a TD yet; a host clock more than 300 s before the token's issue time is refused, GPU path only."
+
+[[feature]]
+id = "nras-intermediates-004-005"
+level = "hardware"
+order = 19
+since = "2026-10-18"
+hardware_since = "2026-10-18"
+version = "0.2.0-beta.7"
+title_en = "Two pinned NVIDIA signing certificates"
+sentence_en = "NVIDIA's tokens are verified under two pinned intermediate certificates, one RSA and one P-384, each with its fixed algorithm."
+figure = "72 of 200 production keys chained to the P-384 intermediate on 2026-10-18"
+proof = "CHANGELOG 0.2.0-beta.7 (JWKS read 2026-10-18: 72 of 200 keys under 005); runs 2026-10-18 onward"
+limit = "The root CA is not pinned; a re-issued intermediate is refused until pinned."
+
+[[feature]]
+id = "nras-policy-ocsp-secboot"
+level = "hardware"
+order = 20
+since = "2026-10-18"
+hardware_since = "2026-10-22"
+version = "0.2.0-beta.7"
+title_en = "The GPU must boot secure, with debugging off"
+sentence_en = "Each GPU token must report valid certificate chains, no revocation, secure boot on and debugging off."
+proof = "CHANGELOG 0.2.0-beta.7 (dbgstat, 2026-10-18; the tokens of 2026-10-17 and 10-18 pass); x0ne-infer/tests/nras_live/; runs 2026-10-22 onward"
+limit = "Beyond NVIDIA's default policy only on secure boot and debug status."
+
+[[feature]]
+id = "nras-api-key-file"
+level = "hardware"
+order = 21
+since = "2026-10-30"
+hardware_since = "2026-10-30"
+version = "0.2.0-beta.7"
+title_en = "The NVIDIA key comes from a file, never printed"
+sentence_en = "The VM reads the NVIDIA attestation key from a file, never prints it, and stops (103) when the service refuses it."
+proof = "CHANGELOG 0.2.0-beta.7 (nras-key-file, 2026-10-30, exit 103); docs/hardware-runs.md 2026-10-30 and 10-31 (x0ne-cvm 0.2.7 and 0.2.8 read the key)"
+limit = "Outside the VM the key is plain instance metadata; images before 0.2.7 ignore it (docs/limitations.md)."
+
+[[feature]]
+id = "nvml-judges-cc-state"
+level = "hardware"
+order = 22
+since = "2026-10-27"
+hardware_since = "2026-10-30"
+version = "0.2.0-beta.7"
+title_en = "No serving unless the GPU is in confidential mode"
+sentence_en = "The VM refuses to serve (74) unless the GPU reports production confidential computing mode with developer tools off."
+proof = "CHANGELOG 0.2.0-beta.7 (NVML judges GPUs, devtools, 2026-10-27); x0ne-OS (not public yet) CHANGELOG (CVM 0.2.7); runs 2026-10-30 and 10-31"
+limit = "The GPU's confidential ready state is set by the OS image's x0ne-gpu-ready oneshot."
+
+[[feature]]
+id = "pck-crl"
+level = "hardware"
+order = 23
+since = "2026-10-18"
+hardware_since = "2026-10-25"
+version = "0.2.0-beta.7"
+title_en = "Revoked Intel certificates are refused"
+sentence_en = "The VM at start-up and your machine at each verdict read Intel's revocation list; a listed certificate is refused."
+figure = "57 certificates on Intel's list of 2026-10-18, none of the runs'"
+proof = "CHANGELOG 0.2.0-beta.7 (PCK CRL; Intel's CRL of 2026-10-18 vendored, 57 PCKs); docs/limitations.md (since 10-18); runs 2026-10-25 onward"
+limit = "None beyond the 24-hour age limit on Intel's collateral."
+
+[[feature]]
+id = "root-ca-crl"
+level = "hardware"
+order = 24
+since = "2026-10-23"
+hardware_since = "2026-10-25"
+version = "0.2.0-beta.7"
+title_en = "Intel's root revocation list is read"
+sentence_en = "Intel's root revocation list is read; a certificate authority or signer listed on it is treated as revoked."
+figure = "list valid one year, empty on 2026-10-23"
+proof = "CHANGELOG 0.2.0-beta.7 (root CA CRL; Intel's CRL number 1, 2026-02-26 to 2027-02-26, read 2026-10-23); docs/limitations.md; runs 2026-10-25 onward"
+limit = "Judged by its own validity window, not the 24-hour limit."
+
+[[feature]]
+id = "tcb-floor-evaluation-22"
+level = "hardware"
+order = 25
+since = "2026-10-22"
+hardware_since = "2026-10-25"
+version = "0.2.0-beta.7"
+title_en = "A floor on the host's security level"
+sentence_en = "Transparent by default: the host is judged on Intel's standard data and its advisories are named; strict, on request, refuses an out-of-date host."
+figure = "3 VMs refused, 1 verified (2026-10-25)"
+proof = "CHANGELOG 0.2.0-beta.7 (TCB floor); docs/hardware-runs.md 2026-10-25 (qwen3:0.6b VERIFIED under evaluation 22; 3 VMs refused 76, FMSPC 00806f050000 OutOfDate)"
+limit = "Standard data from evaluation 20, the latest from 22, none older than 24 hours. Transparent names the advisories; it does not protect against them. A looser floor takes a new build."
+
+[[feature]]
+id = "receipt-disclosures"
+level = "hardware"
+order = 26
+since = "2026-10-24"
+hardware_since = "2026-10-30"
+version = "0.2.0-beta.7"
+title_en = "The receipt says what is not proven"
+sentence_en = "The receipt states four things it does not prove, the device that computed, the host's security level, the sampling settings and the seed."
+proof = "docs/verification.md (NONE_OF_IT, compute_device first 2026-10-24); docs/hardware-runs.md 2026-10-30 (json_schema receipt, signed seed)"
+limit = "A disclosure is not a proof of absence: the host still reads timing and sizes."
+
+[[feature]]
+id = "answer-padding"
+level = "hardware"
+order = 27
+since = "2026-10-23"
+hardware_since = "2026-10-31"
+version = "0.2.0-beta.7"
+title_en = "Answers are padded in size and time"
+sentence_en = "Whole answers leave at a rounded size, 16 KiB at least, on 100 ms ticks; streams send frames of one size."
+figure = "answers of 1 B to 8 KiB leave as one 16,581 B record at 1.00 s; the rounding adds at most 11.6 %"
+proof = "CHANGELOG 0.2.0-beta.7 (length padding, Padme, 2026-10-24; loopback traces 2026-10-23 and 10-24); docs/api.md (padding); docs/hardware-runs.md 2026-10-31 (clear stream of 23 frames, first token 0.211 s)"
+limit = "The network still reads the length to within a size class, the cadence, when a stream starts and ends, and the request's size; the host can read the length from the computation, which stops when the generation ends (deduced, THREAT_MODEL.md)."
+
+[[feature]]
+id = "streaming-sse"
+level = "hardware"
+order = 28
+since = "2026-10-22"
+hardware_since = "2026-10-22"
+version = "0.2.0-beta.7"
+title_en = "Streamed answers, receipt on the last chunk"
+sentence_en = "With stream on, the answer arrives as the model generates it, in the OpenAI format; the receipt rides the final chunk."
+figure = "first content after 7.77 s on a 16,021-token prompt (2026-10-22)"
+proof = "CHANGELOG 0.2.0-beta.7 (Streaming); docs/hardware-runs.md 2026-10-22 (streams of 16,021 and 32,021 tokens, first content 7.77 s and 27.62 s)"
+limit = "No event for 90 s ends the stream in error; nothing is signed for a stream its client left."
+
+[[feature]]
+id = "relay-streaming"
+level = "hardware"
+order = 29
+since = "2026-10-22"
+hardware_since = "2026-10-22"
+version = "0.2.0-beta.7"
+title_en = "The relay streams and rebuilds every event"
+sentence_en = "The local endpoint streams from the VM; every event is checked against an allow list and rebuilt before the receipt is verified."
+proof = "CHANGELOG 0.2.0-beta.7 (Relay streaming); docs/hardware-runs.md 2026-10-22, 10-31, 11-01, 11-04 (36 streams on x0ne Core)"
+limit = "The padding stops at the relay: your own machine sees the real cadence."
+
+[[feature]]
+id = "retry-semantics"
+level = "hardware"
+order = 30
+since = "2026-10-22"
+hardware_since = "2026-10-22"
+version = "0.2.0-beta.7"
+title_en = "Clients retry only when told to"
+sentence_en = "A full queue answers 503 with a wait time; other relay errors say do not retry, so a standard OpenAI client generates once."
+proof = "CHANGELOG 0.2.0-beta.7 (Relay: 503 with Retry-After; openai-python 3.36.0 and 1.109.1, 2026-10-22); docs/hardware-runs.md 2026-10-22 (49 requests)"
+limit = "A failed session proof (503 session quote unavailable) still loses the session."
+
+[[feature]]
+id = "sampling-and-stop"
+level = "hardware"
+order = 31
+since = "2026-10-18"
+hardware_since = "2026-10-30"
+version = "0.2.0-beta.7"
+title_en = "Sampling settings honoured, the sampler signed"
+sentence_en = "Temperature, top_p, seed and stop sequences are honoured; the receipt signs temperature, top_p and seed; tool calling answers 400, not supported yet."
+proof = "CHANGELOG 0.2.0-beta.7 (OpenAI API: temperature, first 2026-10-18); docs/api.md (fields honoured and refused); docs/hardware-runs.md 2026-10-30 (signed seed)"
+limit = "Greedy stays the default; max_completion_tokens ceiling 4096; stop and max_tokens are not signed. Run on hardware with the engine before x0ne Core only."
+
+[[feature]]
+id = "json-schema-constrained-decoding"
+level = "hardware"
+order = 32
+since = "2026-10-30"
+hardware_since = "2026-10-30"
+version = "0.2.0-beta.7"
+title_en = "Answers constrained to a JSON schema"
+sentence_en = "A JSON schema in the request constrains the answer token by token; the receipt names the schema's SHA-256."
+figure = "mask 144 us mean per token"
+proof = "CHANGELOG 0.2.0-beta.7 (json_schema, 2026-10-30); docs/api.md (mask 144 us mean); docs/hardware-runs.md 2026-10-30 (json_schema receipt on TDX)"
+limit = "Schema subset per docs/api.md; a schema using pattern is refused with 400. Run on hardware with the engine before x0ne Core only."
+
+[[feature]]
+id = "sharded-models-as-published"
+level = "hardware"
+order = 33
+since = "2026-10-18"
+hardware_since = "2026-10-18"
+version = "0.2.0-beta.6"
+title_en = "Large models served as published, in pieces"
+sentence_en = "Weight files are mapped read-only as published and checked against their index; qwen3 8b, 5 files, served by x0ne Core in a VM."
+figure = "qwen3:32b on the engine before x0ne Core: 61.0 GiB of a 117 GiB tmpfs instead of 122 GiB with the merge"
+proof = "CHANGELOG 0.2.0-beta.6; docs/hardware-runs.md 2026-10-18 (qwen3:32b, 1.66 USD), 2026-11-04 (qwen3:8b on x0ne Core, TEST); x0ne-infer/catalog/models.toml (qwen3:8b: an index and 5 files); x0ne-infer/src/core_backend.rs (index and headers checked before Core loads)"
+limit = "In confidential mode the copy to the GPU still crosses host-shared memory through the driver's bounce buffers (encrypted). qwen3:32b was served in a VM by the engine before x0ne Core only; on x0ne Core, qwen3:8b in one TEST run."
+
+[[feature]]
+id = "served-model-digest-v2"
+level = "hardware"
+order = 34
+since = "2026-10-18"
+hardware_since = "2026-10-18"
+version = "0.2.0-beta.6"
+title_en = "The served model's fingerprint, recomputable by anyone"
+sentence_en = "The fingerprint of the served model is a SHA-256 over the checksums of config, tokenizer and weights; the VM recomputes it on load."
+proof = "CHANGELOG 0.2.0-beta.6 (model_digest.rs, pin table v1 to v2); every run since 2026-10-18 (model digest in the verdict); CHANGELOG 0.2.0-beta.7 (in local mode --expected-model-digest is compared on the plaintext weights before a backend opens them, exit 77, 2026-11-04)"
+
+[[feature]]
+id = "pinned-catalog"
+level = "hardware"
+order = 35
+since = "2026-10-10"
+hardware_since = "2026-10-14"
+version = "0.2.0-beta.1"
+title_en = "5 Qwen3 models, pinned file by file"
+sentence_en = "The built-in catalog pins 5 Apache-2.0 Qwen3 models to one Hugging Face commit, with every file's size and SHA-256; safetensors only."
+figure = "5 models, Qwen3 0.6B to 32B"
+proof = "CHANGELOG 2026-10-10, 0.2.0-beta.4 (qwen3 8b, 14b, 32b), 0.2.0-beta.7 (Qwen3 only, 2026-11-04); x0ne-infer/catalog/models.toml; pulled in the VM on every run"
+limit = "No cloud-hosted weights: the VM pulls from the catalog's source at boot."
+
+[[feature]]
+id = "pull-resume-parallel"
+level = "hardware"
+order = 36
+since = "2026-10-10"
+hardware_since = "2026-10-14"
+version = "0.2.0-beta.1"
+title_en = "Downloads resume, run in parallel, are hashed before install"
+sentence_en = "pull downloads files and 64 MiB ranges in parallel, resumes what is missing, hashes every file and installs atomically."
+figure = "16 requests in flight at most"
+proof = "CHANGELOG 2026-10-10 (30 tests), 2026-10-11, 0.2.0-beta.7 (parallel pull); docs/pull-run.md; the VM pulls on every run"
+limit = "https only (loopback excepted)."
+
+[[feature]]
+id = "sdk-key-document-v2"
+level = "hardware"
+order = 38
+since = "2026-10-30"
+hardware_since = "2026-10-30"
+version = "prototype"
+title_en = "The VM's key document carries the GPU verdict"
+sentence_en = "The VM's key document binds the session settings and carries NVIDIA's verdict on the GPU; your machine needs no round trip to NVIDIA."
+proof = "CHANGELOG 0.2.0-beta.7 (key document binds the session config, 2026-10-30); docs/hardware-runs.md 2026-10-30 (key document v2 with NVIDIA's verdict)"
+limit = "Breaking for the prototype's earlier callers."
+
+[[feature]]
+id = "gce-lifecycle"
+level = "hardware"
+order = 39
+since = "2026-10-14"
+hardware_since = "2026-10-14"
+version = "0.2.0-beta.2"
+title_en = "One command runs the VM on Google Cloud"
+sentence_en = "x0ne-engine cloud creates the confidential VM, waits until it serves, chats, and always deletes the VM on exit or signal."
+figure = "a down takes about 69 s (VM) plus 4 s (firewall rule)"
+proof = "docs/hardware-runs.md 2026-10-14 (9 VMs, 6.02 USD) through 2026-11-01; CHANGELOG 0.2.0-beta.4 (run), beta.5 (signals, dead up detection)"
+limit = "Google Cloud only; no gcloud is ever run by the shipped binaries."
+
+[[feature]]
+id = "cost-quote-and-caps"
+level = "hardware"
+order = 40
+since = "2026-10-17"
+hardware_since = "2026-10-17"
+version = "0.2.0-beta.5"
+title_en = "The price is announced before anything is billed"
+sentence_en = "Before creating the VM, up prints the spot price, Google's confidential computing surcharge and the run's cap, and waits for your yes."
+figure = "runs cost 0.29 to 6.02 USD each"
+proof = "CHANGELOG 0.2.0-beta.5 (quote, surcharge), 0.2.0-beta.7 (token expiry); docs/hardware-runs.md, the cost of each run (0.29 to 1.66 USD per VM)"
+limit = "No Cloud Billing SKU read for the surcharge; fallback price table dated 2026-10-16."
+
+[[feature]]
+id = "quota-preflight"
+level = "hardware"
+order = 41
+since = "2026-10-17"
+hardware_since = "2026-10-17"
+version = "0.2.0-beta.5"
+title_en = "The GPU quota is checked before billing starts"
+sentence_en = "Before anything is billed, up reads the spot H100 quota and skips the zones that cannot hold the machine."
+proof = "CHANGELOG 0.2.0-beta.5 (regions.get had no H100 metric on 2026-10-17, real project); every up since the 2026-10-17 run"
+limit = "A 400, 403 or 404 from Cloud Quotas is a warning only."
+
+[[feature]]
+id = "firewall-client-32"
+level = "hardware"
+order = 42
+since = "2026-10-30"
+hardware_since = "2026-10-30"
+version = "0.2.0-beta.7"
+title_en = "By default, the VM answers your address only"
+sentence_en = "By default the VM's cloud firewall admits your machine's public address alone on port 443, no longer the whole Internet."
+proof = "CHANGELOG 0.2.0-beta.7 (firewall /32, 2026-10-30); docs/cloud.md (The firewall rule); docs/limitations.md (since 10-30); runs 2026-10-30, 10-31, 11-01 and 11-04 (up printed a /32 Firewall line)"
+limit = "tcp:443 only, from the IPv4 address Google's name server sees, as a /32: machines behind the same NAT share it and reach the port, where mutual TLS refuses them. --allow-from widens the rule, 0.0.0.0/0 included. A client behind a changing address loses the session."
+
+[[feature]]
+id = "serial-console-read-by-up"
+level = "hardware"
+order = 43
+since = "2026-10-25"
+hardware_since = "2026-10-25"
+version = "0.2.0-beta.7"
+title_en = "A VM that never serves is deleted"
+sentence_en = "up reads the VM's console, prints why it refused and deletes a VM that never serves (97), instead of waiting."
+proof = "CHANGELOG 0.2.0-beta.7 (serial console 10-25, console of 0.2.7); docs/hardware-runs.md 2026-10-25 (exit 97), 2026-10-31 (300-character cut)"
+limit = "The console is the cloud operator's to read too: the image prints public facts only."
+
+[[feature]]
+id = "terminal-chat"
+level = "hardware"
+order = 44
+since = "2026-10-16"
+hardware_since = "2026-10-17"
+version = "0.2.0-beta.4"
+title_en = "A verified chat in your terminal"
+sentence_en = "x0ne-engine cloud run brings a model up and opens a chat; each answer says whether its receipt verified."
+proof = "CHANGELOG 0.2.0-beta.4; docs/hardware-runs.md 2026-10-17 (real cloud run)"
+limit = "Open WebUI 0.12.3 works through the relay's local endpoint (docs/api.md); no browser path is attested."
+
+[[feature]]
+id = "openai-compatible-endpoint"
+level = "hardware"
+order = 45
+since = "2026-10-12"
+hardware_since = "2026-10-17"
+version = "0.2.0-beta.2"
+title_en = "Your usual tools, through the local endpoint"
+sentence_en = "The relay serves an OpenAI-compatible endpoint on your machine; Open WebUI and the openai Python client were run against it."
+proof = "CHANGELOG 2026-10-12 (local_api.rs); docs/api.md (Open WebUI 0.12.3, first 2026-10-24); docs/hardware-runs.md 2026-10-17 (OpenAI API through the relay), 2026-10-22 (openai-python)"
+limit = "The fields refused are listed in docs/api.md (tools, logprobs, ...)."
+
+[[feature]]
+id = "refuses-outside-tee"
+level = "hardware"
+order = 46
+since = "2026-09-19"
+hardware_since = "2026-10-17"
+version = "pre-beta"
+title_en = "Outside a confidential VM, the engine refuses to serve"
+sentence_en = "Off a TDX VM the engine stops (64) before any port opens; a release with nothing to pin stops too (87)."
+proof = "CHANGELOG 2026-09-19 (exits 64 outside an enclave), 0.2.0-beta.3 (evidence before pull), 2026-10-13 (exit 87); ci/release-refusal.sh (22 refusals on each release binary, make ci, 2026-11-04); README; x0ne-OS (not public yet) README (exit 64 on the Google VM of 2026-10-17 without the boot log)"
+limit = "The OS image's engine exited 64 on 2026-10-17 without the boot log: a refusal, as designed."
+
+[[feature]]
+id = "benchmarks-published"
+level = "hardware"
+order = 47
+since = "2026-10-17"
+hardware_since = "2026-10-17"
+version = "0.2.0-beta.7"
+title_en = "Speed figures published, with their rows"
+sentence_en = "Decode speeds are published with every row, all of them from an H100 inside a confidential VM."
+figure = "qwen3:8b on an H100 in CC mode through this Engine and the relay: 136.87 tok/s after 58 prompt tokens (TEST); x0ne Core alone after 20: 138.62 tok/s in CC mode; the earlier rows, of the engine before x0ne Core, kept with their dates"
+proof = "docs/benchmarks.md; CHANGELOG 0.2.0-beta.7 (benchmarks page, 2026-10-30); docs/hardware-runs.md 2026-10-22, 2026-11-03 and 2026-11-04; bench/results/2026-11-03-h100-tdx-cc-core; bench/results/2026-11-04-h100-tdx-cc-core-bench; bench/results/2026-11-04-h100-tdx-cc-core-e2e"
+limit = "Not measured: a release build of this Engine on x0ne Core, the cost of confidential mode on the Engine's path, concurrency, quantization, start-up, energy and a published release. Only runs in CC mode are published."
+
+[[feature]]
+id = "concurrency-rehearsal"
+level = "hardware"
+order = 48
+since = "2026-10-22"
+hardware_since = "2026-10-22"
+version = "0.2.0-beta.7"
+title_en = "Several clients at once, rehearsed on hardware"
+sentence_en = "A confidential VM served 49 requests from concurrent clients through the relay, 256 tokens in 3.70 to 3.75 s, for 0.66 USD."
+figure = "49 requests, 0.66 USD"
+proof = "docs/hardware-runs.md 2026-10-22 (rehearsal, qwen3:8b)"
+limit = "No hardware run recorded with more than 3 concurrent clients or more than one client per session. Run with the engine before x0ne Core."
+
+# ---------------------------------------------------------------- local
+
+[[feature]]
+id = "gpu-evidence-per-connection"
+level = "local"
+order = 1
+since = "2026-10-22"
+version = "0.2.0-beta.7"
+title_en = "The GPU proof is bound to each connection"
+sentence_en = "With CPU and GPU attestation, every connection carries NVIDIA tokens over a challenge derived from that connection."
+proof = "CHANGELOG 0.2.0-beta.7 (session-attestation/v4, first 2026-10-22); docs/sdk-e2e.md (GPU binding, 2026-10-27)"
+limit = "Per-connection NVIDIA cost not measured on hardware; the binding is made by the VM's software (Hopper's report names no VM); the runs since 2026-10-28 come from a tree that includes it."
+
+[[feature]]
+id = "td-debug-attribute-refused"
+level = "local"
+order = 2
+since = "2026-09-23"
+version = "pre-beta"
+title_en = "A VM in debug mode is refused"
+sentence_en = "A hardware proof whose debug flag is set is refused by the VM, by your machine and by the structural verifier."
+proof = "CHANGELOG 2026-09-23 (debug TDs refused); docs/limitations.md (TD attributes)"
+limit = "Other attribute bits are not judged."
+
+[[feature]]
+id = "quote-gate-dos-bounds"
+level = "local"
+order = 3
+since = "2026-10-13"
+version = "0.2.0-beta.3"
+title_en = "Proofs and connections are bounded"
+sentence_en = "One hardware proof at a time, a bounded queue, 429 or 503 with a wait time beyond; 256 handshakes at most, 10 s each."
+figure = "600 silent sockets against a 512-descriptor VM: the relay was served, the sockets closed within 15 s"
+proof = "CHANGELOG 2026-10-13 (bounded quotes), 2026-10-16 (bounded TLS handshakes; Host checked); cloud_e2e_tests"
+limit = "Eight simultaneous local requests against --max-queue 2 lost the session on 2026-10-22, before the relay's 503 fix."
+
+[[feature]]
+id = "process-hardening-secret-memory"
+level = "local"
+order = 4
+since = "2026-10-13"
+version = "0.2.0-beta.2"
+title_en = "Keys live in protected memory"
+sentence_en = "The engine cannot be dumped; session and connection keys live in protected or locked memory, zeroed before release."
+figure = "/proc/pid/mem EACCES, PTRACE_ATTACH EPERM for the same user"
+proof = "CHANGELOG 2026-10-13 (harden::process, harden::SecretBytes, measured on the real binary); CHANGELOG 0.2.0-beta.7 (LD_PRELOAD exit 73, 2026-10-23; a release build also refuses LD_LIBRARY_PATH, CUDA_INJECTION64_PATH and NVTX_INJECTION64_PATH, exit 73, 2026-11-04, played by ci/release-refusal.sh)"
+limit = "The released key has ordinary copies (parsed array, ReleasedKey) and the receipt signing key is ordinary heap."
+
+[[feature]]
+id = "attested-path-only-release"
+level = "local"
+order = 5
+since = "2026-10-13"
+version = "0.2.0-beta.2"
+title_en = "The release ships the verified path only"
+sentence_en = "The release archive ships the client of the verified path only: the command line, the cloud tool and the relay."
+proof = "CHANGELOG 2026-10-13 (no SSH in the release); CHANGELOG 0.2.0-beta.7 (the x0ne-infer package, 2026-11-04); tests/cloud_source_sweep.rs"
+limit = "No release has been published. The server is not in it: it ships in the confidential VM's image only."
+
+[[feature]]
+id = "reproducible-deb"
+level = "local"
+order = 6
+since = "2026-10-13"
+version = "0.2.0-beta.2"
+title_en = "The Debian package builds the same twice"
+sentence_en = "make deb builds the package offline with the same SHA-256 from two containers; a host build and a VM build matched."
+figure = "2 builds, 1 SHA-256 (2026-10-17 and 2026-10-22)"
+proof = "CHANGELOG 2026-10-13 (reproducible .deb); CHANGELOG 0.2.0-beta.7 (repro-compare, 2026-10-22: three packages and x0ne-cvm 0.2.3 identical); docs/pinning.md"
+limit = "Same machine and operator: not yet an independent rebuild."
+
+[[feature]]
+id = "mrtd-min-svn"
+level = "local"
+order = 7
+since = "2026-10-23"
+version = "0.2.0-beta.7"
+title_en = "A floor on the firmware version"
+sentence_en = "An image reference may set a minimum firmware version; an older firmware Google once signed is refused."
+proof = "CHANGELOG 0.2.0-beta.7 (min_svn, 2026-10-23)"
+limit = "Published references carry no floor."
+
+[[feature]]
+id = "nras-submods-binding"
+level = "local"
+order = 8
+since = "2026-10-23"
+version = "0.2.0-beta.7"
+title_en = "NVIDIA's overall verdict must name each GPU token"
+sentence_en = "The overall NVIDIA token must carry exactly one SHA-256 per GPU token sent, no more, no less."
+proof = "CHANGELOG 0.2.0-beta.7 (submods, 2026-10-23; shape read from the production token of 2026-10-17)"
+limit = "Applies to the boot document and to connections; a serial named twice is refused (75)."
+
+[[feature]]
+id = "tcb-standing-hourly-recheck"
+level = "local"
+order = 9
+since = "2026-10-23"
+version = "0.2.0-beta.7"
+title_en = "The host's security level is re-read every hour"
+sentence_en = "Every hour the VM and the relay re-read Intel's security data; a verdict against the host stops the answers."
+figure = "24 h at most on unreachable data"
+proof = "CHANGELOG 0.2.0-beta.7 (tcb_standing, 2026-10-23; fake PCS rating OutOfDate after boot); docs/limitations.md"
+limit = "No recorded run lasted an hour: never observed on hardware."
+
+[[feature]]
+id = "prefill-chunks-decode-speed"
+level = "retired"
+order = 8
+since = "2026-10-21"
+version = "0.2.0-beta.7"
+title_en = "Qwen3 on an adapted open-source model"
+sentence_en = "Qwen3 ran on a modified copy of an open-source model implementation, with fused operations and an in-place cache; x0ne Core replaced it."
+proof = "CHANGELOG 0.2.0-beta.7 (2026-10-21, prefill sized by prompt length; Qwen3-8B, prompts of 3,827, 7,926 and 16,120 tokens)"
+replaced_by = "x0ne-core-engine"
+
+[[feature]]
+id = "x0ne-core-engine"
+level = "hardware"
+order = 6
+since = "2026-11-04"
+hardware_since = "2026-11-04"
+version = "0.2.0-beta.7"
+title_en = "Qwen3 runs on x0ne Core, our own GPU engine"
+sentence_en = "x0ne Core runs Qwen3 on the GPU with its own kernels, compiled ahead of time, and replays one CUDA graph per generated token."
+figure = "qwen3:8b on an H100 in CC mode: 136.87 tok/s through this Engine and the relay (TEST); x0ne Core alone: 138.62 tok/s in CC mode"
+proof = "CHANGELOG 0.2.0-beta.7 (x0ne Core is the served engine, 2026-11-04); x0ne-core/PROVENANCE.md; docs/hardware-runs.md 2026-11-04 (this Engine on x0ne Core, a TEST measurement), 2026-11-03 (x0ne Core alone, bench image, CC mode); bench/results/2026-11-04-h100-tdx-cc-core-e2e; bench/results/2026-11-03-h100-tdx-cc-core"
+limit = "Qwen3 dense in BF16, on one GPU only. Through this Engine, one run of qwen3:8b on an H100 in a TDX VM in CC mode (2026-11-04), a TEST measurement, not a release. x0ne Core alone ran on an H100 in CC mode on 2026-11-03, from a bench image without NVIDIA attestation."
+
+
+[[feature]]
+id = "gpu-memory-bounded-context"
+level = "local"
+order = 13
+since = "2026-10-16"
+version = "0.2.0-beta.4"
+title_en = "The context fits the GPU memory left"
+sentence_en = "On a GPU the model's whole context must fit beside its weights, or it is not loaded; a longer prompt gets a 413."
+proof = "CHANGELOG 0.2.0-beta.4; 0.2.0-beta.6 (/v2/ready context_tokens); on x0ne Core: the model's whole max_position_embeddings in the arena reserved at load, or no load (x0ne-infer/src/core_backend.rs, read in the code; built with cuda only, not run by the tests without a GPU); the 413 is the shared loop's (tests the_context_cuts_the_budget and the_context_window_is_enforced_before_the_model_runs)"
+limit = "On hardware, only qwen3:8b has loaded on x0ne Core through this Engine, on an H100, with its whole context of 40,960 tokens (2026-11-04, a TEST measurement); no prompt there went past 16,068 tokens, so the 413 was not exercised. Whether a model's whole context fits an H100 80 GB is computed from its weights and KV cache in docs/pull-run.md, without x0ne Core's working buffers."
+
+[[feature]]
+id = "model-key-release"
+level = "local"
+order = 14
+since = "2026-10-24"
+version = "0.2.0-beta.7"
+title_en = "A model owner's key, released to verified VMs only"
+sentence_en = "The relay releases the owner's model key, encrypted to a key the VM proved; the VM then unseals the weights."
+figure = "8 refusals tested against the simulated VM"
+proof = "CHANGELOG 0.2.0-beta.7 (cloud mode serves a model owner's sealed weights); docs/model-key.md; docs/verification.md (weight sealing)"
+limit = "Never run on TDX hardware; the VM's clock is the host's; the sealed file is hosted by the owner."
+
+[[feature]]
+id = "sealed-weights-aes-gcm"
+level = "local"
+order = 15
+since = "2026-09-18"
+version = "pre-beta"
+title_en = "Weights sealed, opened only after the key release"
+sentence_en = "x0ne-infer seal encrypts the weights; a known-answer test fixes the format, and the key lease is bounded in time."
+proof = "CHANGELOG 2026-09-18 (sealed-weights format, known-answer vector), 2026-10-11 (key lease), 2026-09-23 (seal.rs); docs/limitations.md (key broker v0)"
+limit = "The v0 key arrives by environment variable, zeroed after exec; no sealed-weights run on TDX recorded."
+
+[[feature]]
+id = "sdk-offline-real-quote-test"
+level = "local"
+order = 16
+since = "2026-10-23"
+version = "prototype"
+title_en = "The SDK replays a real hardware proof offline"
+sentence_en = "A test accepts the real Google Cloud proof of 2026-10-18 with its boot log and endorsement, and refuses each one-bit change."
+proof = "CHANGELOG 0.2.0-beta.7 (x0ne-sdk verify_quote, 2026-10-23); x0ne-sdk/tests/real_quote_2026_10_18.rs"
+limit = "Intel's data is four days later than the run (the run's own was not kept)."
+
+[[feature]]
+id = "sdk-chunked-streaming"
+level = "hardware"
+order = 3
+since = "2026-10-30"
+hardware_since = "2026-11-01"
+version = "prototype"
+title_en = "Sealed answers streamed, VM to SDK, through the relay"
+sentence_en = "The SDK streams a sealed answer from the VM; the relay on your machine passes each frame on unopened. Measured on hardware once."
+proof = "CHANGELOG 0.2.0-beta.7 (sealed streaming, 2026-10-30; the relay frame by frame, 2026-10-31; the run of 2026-11-01); docs/sdk-e2e.md (Streaming, Through the relay); docs/hardware-runs.md 2026-11-01; docs/api.md (message/ohttp-chunked-req and -res, 413)"
+limit = "One stream on hardware, from the SDK run in Node, under the TEST key and TEST log; not yet from a browser tab. The host sees each frame's size and the cadence."
+
+[[feature]]
+id = "sdk-replay-guard"
+level = "local"
+order = 17
+since = "2026-10-23"
+version = "prototype"
+title_en = "A sealed request cannot be replayed"
+sentence_en = "The VM refuses a sealed request replayed within its window."
+proof = "CHANGELOG 0.2.0-beta.7 (replay window, 2026-10-30; ReplayGuard first 2026-10-23)"
+limit = "Window and memory bounds per the CHANGELOG entry; not exercised on hardware."
+
+[[feature]]
+id = "sev-snp-verifier"
+level = "local"
+order = 18
+since = "2026-10-22"
+version = "0.2.0-beta.7"
+title_en = "AMD confidential VMs: the verifier, on your machine"
+sentence_en = "Your machine can verify an AMD SEV-SNP report up to AMD's pinned roots (Milan, Genoa, Turin), with floors on the firmware."
+proof = "CHANGELOG 0.2.0-beta.7 (AMD SEV-SNP verifier, first 2026-10-22; SEV-SNP relay client); docs/limitations.md (a Scaleway report measured 2026-10-28)"
+limit = "Not wired to any host or guest image; the guest side is built, never executed on an SNP machine; Milan refused unless allowed."
+
+[[feature]]
+id = "transparency-log-proof"
+level = "local"
+order = 19
+since = "2026-10-22"
+version = "0.2.0-beta.7"
+title_en = "The image reference must be in a public log"
+sentence_en = "The relay requires a transparency-log proof for the image reference; a forked, stale or unreachable log is refused."
+proof = "CHANGELOG 0.2.0-beta.7 (tlog-proof, 2026-10-22; tests/tlog_http.rs); docs/pinning.md (no public log); x0ne-OS (not public yet) README (make verify-dist)"
+limit = "TEST log only, no public log; the relay compares with its state directory and reads the log's tiles; the SDK's memory is the caller's (sdk-log-memory)."
+
+[[feature]]
+id = "stripped-binaries"
+level = "local"
+order = 20
+since = "2026-10-25"
+version = "0.2.0-beta.7"
+title_en = "Small release binaries"
+sentence_en = "Release binaries are stripped: x0ne-infer goes from 89.6 MB to 9.9 MB."
+figure = "89.6 MB to 9.9 MB"
+proof = "CHANGELOG 0.2.0-beta.7 (stripped binaries, 2026-10-25); README (the Quick start's build, without cuda, in the CI image, Debian 12, 2026-11-04)"
+limit = "Sizes of the build without cuda. Built with cuda and nvml in the CUDA 13.3.1 build image of x0ne OS (not public yet), x0ne-infer goes from 100.1 MB to 15.9 MB (2026-11-04)."
+
+[[feature]]
+id = "test-suite-and-coverage"
+level = "local"
+order = 21
+since = "2026-08-22"
+version = "0.2.0-beta.7"
+title_en = "1,355 tests, 92.58 % line coverage, in a local CI"
+sentence_en = "cargo test -p x0ne-infer passes 1,355 tests; make ci adds every feature, strict lints and licence and advisory checks; 92.58 % line coverage."
+figure = "1,355 tests, 92.58 % of x0ne-infer's lines"
+proof = "README (1355 tests pass, 33 ignored, in the CI image, 2026-11-04); make coverage on 2026-11-04 (ci/coverage-baseline.json: x0ne-infer 92.58 % of lines); CHANGELOG 0.2.0-beta.7 (make coverage, CI entries); CHANGELOG 2026-08-22 (CI)"
+limit = "cargo deny, not cargo audit; deny.toml ignores paste and four zip advisories, to re-examine by 2026-11-17. x0ne Core, compiled with cuda only, is in neither this count nor this coverage."
+
+[[feature]]
+id = "public-claims-held-by-tests"
+level = "local"
+order = 22
+since = "2026-10-22"
+version = "0.2.0-beta.7"
+title_en = "16 promises we never make, held by a test"
+sentence_en = "A test forbids 16 claims this project does not make, in the README, the docs, the pages and the messages."
+figure = "16 forbidden claims, 14 invariants"
+proof = "x0ne-infer/THREAT_MODEL.md (16 promises, 14 invariants); CHANGELOG 0.2.0-beta.7 (public_claims, 2026-10-22)"
+limit = "The site's own pages are outside the test's reach."
+
+[[feature]]
+id = "no-log-on-answer-paths"
+level = "local"
+order = 23
+since = "2026-10-23"
+version = "0.2.0-beta.7"
+title_en = "Nothing is logged on the answer paths"
+sentence_en = "A test forbids logging on the answer paths; errors cite at most 64 bytes; a crash leaves as a padded error."
+proof = "CHANGELOG 0.2.0-beta.7 (no_log_on_answer_paths, 2026-10-23; error quoting 64 B, panic contained)"
+limit = "Not a no-logging proof: the VM's journal stays in its memory, and the promise is on the forbidden list."
+
+[[feature]]
+id = "no-secret-on-argv-or-environ"
+level = "local"
+order = 24
+since = "2026-10-11"
+version = "0.2.0-beta.1"
+title_en = "No secret on the command line or environment"
+sentence_en = "No command prints the value of an unknown argument; a key typed in place of a file name is refused without being printed."
+proof = "CHANGELOG 2026-10-11 (key out of the environment), 0.2.0-beta.7 (argv secrets, environ overwrite)"
+limit = "The key is visible from exec to the first step of main, and in the launcher's environment."
+
+[[feature]]
+id = "sdk-log-memory"
+level = "local"
+order = 26
+since = "2026-10-31"
+version = "0.2.0-beta.7"
+title_en = "The SDK remembers the log it verified"
+sentence_en = "The SDK keeps the last log checkpoint it verified; a log that forks, goes back, or grows without proof is refused."
+proof = "CHANGELOG 0.2.0-beta.7 (the log's memory, 2026-10-31); docs/sdk-e2e.md (The log's memory); x0ne-sdk/tests/tlog_consistency.rs"
+limit = "TEST log only, not run on hardware. The memory is the caller's to keep (tlog_checkpoint in the ABI, localStorage in the loader); the consistency proof (tlog-witness add-checkpoint body) comes from the integrator, the SDK fetches no tile; a memory emptied starts over."
+
+[[feature]]
+id = "nras-signing-chain-revocation"
+level = "local"
+order = 27
+since = "2026-10-31"
+version = "0.2.0-beta.7"
+title_en = "NVIDIA's signing certificates are checked for revocation"
+sentence_en = "Revocation answers about NVIDIA's signing certificates are verified; a revoked one is refused, and the verdict says what was checked."
+proof = "CHANGELOG 0.2.0-beta.7 (the NRAS signing chain's revocation, 2026-10-31); x0ne-infer/src/nras_ocsp.rs (tests on an in-process responder); docs/limitations.md (NRAS chain)"
+limit = "Not run on hardware: no TD fetches the OCSP responses yet, so production verdicts say 'no response stapled' under the transparent policy; the intermediate's own status is unverifiable without NVIDIA's unpublished CA 001; NVIDIA's CRL is not read."
+
+# ---------------------------------------------------------------- prototype
+
+[[feature]]
+id = "sev-snp-guest-side"
+level = "prototype"
+order = 3
+since = "2026-10-28"
+version = "0.2.0-beta.7"
+title_en = "AMD confidential VMs: the guest side, built"
+sentence_en = "The AMD SEV-SNP guest path and its launch-measurement tool are built and tested locally, never run on an AMD machine."
+proof = "CHANGELOG 0.2.0-beta.7 (SEV-SNP guest, snp-measure); docs/limitations.md (guest side built, not executed)"
+limit = "Never executed on an SNP machine."
+
+[[feature]]
+id = "ohttp-prototype-crate"
+level = "prototype"
+order = 4
+since = "2026-10-24"
+version = "prototype"
+title_en = "A relay that sees who asks, not what"
+sentence_en = "A prototype of a shared service where a relay sees who asks and a gateway sees what; no x0ne binary uses it yet."
+proof = "x0ne-ohttp/README.md (prototype of the non-targeting layer, RFC 9458)"
+limit = "No package ships it; it changes nothing in what x0ne Engine guarantees today."
+
+[[feature]]
+id = "oblivious-tokenizer"
+level = "prototype"
+order = 5
+since = "2026-10-24"
+version = "research"
+title_en = "A tokenizer whose memory accesses follow length, not text"
+sentence_en = "A measurement of what a standard tokenizer leaks through memory accesses, and a tested countermeasure, off the served path."
+proof = "x0ne-infer/docs/oblivious-tokenizer.md (R&D, behind x0ne_infer::oblivious_tok); CHANGELOG 2026-10-30"
+limit = "Research; not wired into the serving path."
+
+# ---------------------------------------------------------------- planned
+
+[[feature]]
+id = "sealed-streaming-relay-browser"
+level = "planned"
+order = 1
+title_en = "Sealed streams opened in a browser tab"
+sentence_en = "Next: the sealed stream opened in a browser tab, as it was from Node on hardware; no machine in between reads it."
+proof = "README (What is left, first item); docs/sdk-e2e.md (what is left, in order, point 6); docs/hardware-runs.md 2026-11-01 (from Node)"
+limit = "The browser SDK has chatStream, run in Node and not in a browser tab; the one sealed stream on hardware came from Node too."
+
+[[feature]]
+id = "signing-ceremony-release-key"
+level = "planned"
+order = 2
+title_en = "A release key, a signed distribution, a published image"
+sentence_en = "Planned: the archive key's signing ceremony, then signed binaries and a published VM image you can pin."
+proof = "README (What is left); CHANGELOG 0.2.0-beta.5 (RELEASE is None); x0ne-OS (not public yet) docs/archive-key.md and the keygen rehearsal"
+limit = "Until then every reference, image and measurements file is TEST."
+
+[[feature]]
+id = "public-transparency-log"
+level = "planned"
+order = 3
+title_en = "A public log of every image reference"
+sentence_en = "Planned: a public transparency log with witnesses, and a relay run by a third party."
+proof = "README (What is left); docs/pinning.md (no public log)"
+limit = "Only a TEST log exists today; the SDK already holds each checkpoint to the one it remembers (sdk-log-memory)."
+
+[[feature]]
+id = "external-audit"
+level = "planned"
+order = 4
+title_en = "An external security audit"
+sentence_en = "Planned: an independent security audit of the engine, the relay and the SDK, its report published."
+proof = "README (What is left)"
+limit = "No external audit has been done yet."
+
+[[feature]]
+id = "on-premise-tdx-h100"
+level = "planned"
+order = 5
+title_en = "Confidential serving on your own servers"
+sentence_en = "Planned: the same verified serving on your own Intel TDX host with an H100, not only on Google Cloud."
+proof = "x0ne-OS (not public yet) README (no x0ne-gpu-nvidia package, the CUDA engine in the confidential VM image only); docs/limitations.md (transport not attested outside cloud mode)"
+limit = "The lifecycle is Google Cloud only today."
+
+[[feature]]
+id = "multi-gpu-and-mig"
+level = "planned"
+order = 6
+title_en = "Several GPUs, and GPU partitions"
+sentence_en = "Planned: models served over more than one GPU, and on partitioned GPUs, measured in a confidential VM."
+proof = "docs/hardware-runs.md (no hardware run recorded for); x0ne-infer/THREAT_MODEL.md (multi-GPU)"
+limit = "No hardware run with more than one GPU or with a partitioned GPU is recorded."
+
+[[feature]]
+id = "tool-calling"
+level = "planned"
+order = 7
+title_en = "Tool calling"
+sentence_en = "Planned: tools and function calls in the OpenAI format; today they answer 400."
+proof = "CHANGELOG 0.2.0-beta.7 (OpenAI API: tool calling is a 400); docs/api.md"
+limit = "Open WebUI works through its legacy function calling (docs/api.md)."
+
+# ---------------------------------------------------------------- retired
+
+[[feature]]
+id = "ssh-demo-client"
+level = "retired"
+order = 1
+since = "2026-09-18"
+version = "pre-beta"
+title_en = "The SSH demonstration client"
+sentence_en = "The SSH demo client sent the question before any check and needed a non-confidential build; the relay path replaced it."
+proof = "CHANGELOG 2026-09-18 (x0ne-infer-chat verifies the TDX quote), 2026-09-23 (says it is a demonstration), 2026-10-13 (no SSH in the release)"
+replaced_by = "attested-relay-path"
+
+[[feature]]
+id = "binding-v2-static-tls-key"
+level = "retired"
+order = 2
+since = "2026-10-12"
+version = "0.2.0-beta.2"
+title_en = "The proof bound to the VM's fixed connection key"
+sentence_en = "The proof named the VM's fixed connection key; whoever extracted that key could relay the session. One proof per connection replaced it."
+proof = "CHANGELOG 2026-10-12 (v2 binding), 2026-10-13 (binding v3)"
+limit = "The SDK refuses a proof in the old form."
+replaced_by = "session-quote-per-connection"
+
+[[feature]]
+id = "session-schema-v3"
+level = "retired"
+order = 3
+since = "2026-10-13"
+version = "0.2.0-beta.2"
+title_en = "Connection proofs with CPU evidence only"
+sentence_en = "Connection proofs carried CPU evidence only; the next version adds the GPU tokens per connection and refuses the old form."
+proof = "CHANGELOG 2026-10-13; CHANGELOG 0.2.0-beta.7 (session-attestation/v4: schema v3 refused)"
+replaced_by = "gpu-evidence-per-connection"
+
+[[feature]]
+id = "served-model-digest-v1"
+level = "retired"
+order = 4
+since = "2026-10-13"
+version = "0.2.0-beta.2"
+title_en = "The first model fingerprint, over merged weights"
+sentence_en = "The first fingerprint hashed the merged weights, config and tokenizer; the recomputable one replaced it on 2026-10-18."
+proof = "CHANGELOG 2026-10-13 (digest_sha256 pin), 0.2.0-beta.5 (registry::pull_served), 0.2.0-beta.6 (v1 to v2 table)"
+limit = "Every record naming an old value must take the new one."
+replaced_by = "served-model-digest-v2"
+
+[[feature]]
+id = "shard-merge-in-td"
+level = "retired"
+order = 5
+since = "2026-10-17"
+version = "0.2.0-beta.5"
+title_en = "Weight files merged inside the VM before serving"
+sentence_en = "Until beta.5 the VM merged a model's weight files into one; beta.6 serves them as published."
+proof = "CHANGELOG 0.2.0-beta.5 (merges them), 0.2.0-beta.6 (sharded models served as published)"
+replaced_by = "sharded-models-as-published"
+
+[[feature]]
+id = "image-reference-v1"
+level = "retired"
+order = 6
+since = "2026-10-12"
+version = "0.2.0-beta.2"
+title_en = "The first image reference format"
+sentence_en = "The first reference accepted any well-hashed partition table and the boot image twice; refused by name since beta.5."
+proof = "CHANGELOG 0.2.0-beta.5 (v1 refused: proxy 89, image import and up 2); x0ne-OS (not public yet) README (reference-v1.json not published)"
+replaced_by = "ccel-closed-list-reference"
+
+[[feature]]
+id = "pcs-standard-collateral"
+level = "retired"
+order = 7
+since = "2026-08-21"
+version = "pre-beta"
+title_en = "Intel's default security data"
+sentence_en = "Until 2026-10-22 the verifiers took Intel's default answer (evaluation 20); the floor at evaluation 22 replaced it."
+proof = "CHANGELOG 0.2.0-beta.7 (TCB floor: PCS default was evaluation 20 on 2026-10-22)"
+replaced_by = "tcb-floor-evaluation-22"

@@ -1,0 +1,2 @@
+loaded in 3.6 s: NVIDIA H100 80GB HBM3 (cc 9.0, 132 SMs, cubin sm_90a), driver 13020, cuBLAS 130400, arena 16447907360 bytes, decode graph 439 nodes, decode attention split-K P 49 (grid 8 x 49, 4 q heads per block, 3 blocks per SM, merge Kernel), feed-forward dense, decode Graph
+s20 e3 run 0: first token 0.008 s, decode 138.96 tok/s

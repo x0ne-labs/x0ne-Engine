@@ -1,0 +1,28 @@
+# `cargo audit` configuration.
+#
+# An ignore here is a CLAIM, and the claim is spelled out in SECURITY.md
+# under "Known advisories" — never here alone. A test
+# (`x0ne-infer::security_doc`) fails if an id is ignored without its
+# paragraph, because an ignore whose reason has been forgotten is worse than
+# a red audit: it is a red audit that stopped being read.
+
+[advisories]
+ignore = [
+  # rsa 0.9.x, Marvin timing sidechannel, no fixed upgrade available.
+  # Applies to RSA operations with a PRIVATE key. This crate only ever
+  # verifies signatures with a public key (the pinned NVIDIA intermediate,
+  # `nras.rs`); the sole `RsaPrivateKey` is a test fixture. See SECURITY.md.
+  "RUSTSEC-2023-0071",
+  # zip 8.6.0, pulled only by candle-core 0.11.0, which requires zip ^8.6;
+  # since 2026-11-04 candle is the CPU reference of the tests (feature
+  # `candle-reference`), linked by no served build. Fixed in 9.0.0 (RustSec) or 9.0.1 (GHSA-4684-h2q9-2vcp). The four are
+  # in ZipArchive::extract, ZipArchive::extract_unwrapped_root_dir and
+  # ZipStreamReader::extract, which no crate of the graph calls (candle-core
+  # reads npz and PyTorch files without extracting; this workspace calls
+  # neither loader). A call to any of them makes these live. Re-examine by
+  # 2026-11-17. See SECURITY.md.
+  "RUSTSEC-2026-0367",
+  "RUSTSEC-2026-0368",
+  "RUSTSEC-2026-0369",
+  "RUSTSEC-2026-0429",
+]

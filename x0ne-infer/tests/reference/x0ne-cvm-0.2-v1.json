@@ -1,0 +1,61 @@
+{
+ "schema": "x0ne-engine/reference/v1",
+ "provider": "gcp",
+ "tee": "intel-tdx",
+ "image": {
+  "name": "x0ne-cvm",
+  "version": "0.2",
+  "gcp_image": "x0ne-cvm-0-2",
+  "disk_tar_sha256": "48180d785fb97996d3163d3e61e85cdc710bd09aa139c2ccffed30da079f93b8",
+  "source": {
+   "x0ne_os": "e0c6641160add678b2058b494ed4e9d61cc31386",
+   "engine": "856a470bf04d107591cfc6599051c3637606515c",
+   "debian_snapshot": "20261010T000000Z"
+  }
+ },
+ "mrtd": {
+  "policy": "gce-launch-endorsement",
+  "root_spki_sha256": "910dcbe4b31f3d98d5179dca3b988611bb4b0cf9bc9e0ae8f23e411719544f1c",
+  "ram_gib": {
+   "a3-highgpu-1g": 0
+  }
+ },
+ "rtmr0": {
+  "policy": "report",
+  "known": {
+   "a3-highgpu-1g": []
+  }
+ },
+ "rtmr1": {
+  "policy": "eventlog",
+  "boot_applications_sha384": [
+   "27a2435aa9592d86ac602f2c19e9ae4c4991eacca2c398da522cb4d6e97b8229f9abe1567c407f255c693fa4f2a8186a",
+   "e2fcf71aff0aa2e1127cfb674b122f37c0213ae6bf4ee3d9c5bd2eeada1140e7e941ea63140fd75d231d3bf07e47bc22"
+  ]
+ },
+ "rtmr2": {
+  "policy": "eventlog",
+  "events_sha384": {
+   ".linux": "5a5e7526e82b197145a0320b07cdc4c3bd08f787fb4c35e03b63c5f4578c5623cbf19a4b1b7c119b8387a348488826d4",
+   ".osrel": "49f47a18bb5329f226776351b8a180d1d3bf874649944400d54395d40e993c1dd0b49067b4d6d4cdd610b3e02f2609fc",
+   ".cmdline": "74b27ed99381b5143d3aa9e1382d92736d0ca1e0389697345bcb5f21c9800f6ba51349beb53779d61a069afca396ceee",
+   ".initrd": "7d3b8c71e5dd8bb2504dadd9649b6508baf72c43e14d0a01d5343768115fe6c00e3d4b5b3cd9eef61b6ae8cc5cdf58fa",
+   ".uname": "67722e2cbff96a84f884882f24f79eb5ea773d8c0cb1464cf6e80749cebef872ba8145612df7d28720b1f2bf5cb6445e",
+   ".sbat": "054191c566aee049752ee67c7622bcc835369c18b3a2387a2c4aa043bf189417d25391a5ac239878b4b1b05ed7d18437",
+   "name:.linux": "2fdc8531577607d99031d70fb3063e9e4aecf50a7eaa9c2b0bcda5c5a6e111302996c138465920cadea4416d36089651",
+   "name:.osrel": "1d6077a2797911c374edbc610fa01e184a1e8e4492ff35a1e355efeaf330e7c8cb03492dac7ee13d3efa6f099e0bbc81",
+   "name:.cmdline": "93c4536618d5be4a74e2cb9caa0a4d8975ce70dc9efe0c53aa4cedbcda9d02f60c8a68fd01f960b876f9dd31818a6f41",
+   "name:.initrd": "1bcd2ed729fb9dc7b1a168ab4a6e2e04b66d7405ea2622d666780ec9f1eceb031010f0bdf37c46ab34e6a7201b73d5ae",
+   "name:.uname": "16b48d924b98bdfe9d5c97983801443e5371dae2de1a9911636b417b1b14a7d54d9c648a8c64510c3dbd5d6060387171",
+   "name:.sbat": "52a957bc706ceae8f202046a07342684b10ce67c73756def7713fe1246935abe07f7043f6b76d78e1e05772aaa46c56c",
+   "tag:LoadOptions": "c10bb805b7a4cb507d32afe9cb75166c52a45bfd644debd4d2c08d14fa077e29cb2dd1077eb36dbd8a4b30ddd2500b7f",
+   "tag:Linux initrd": "c6fc33ddd3007fcdc67b7b8f5be60db9ffee2baab2a16b28562089a78e0a6d93a6ed8ce480e24ec88cf36cc54962177c"
+  }
+ },
+ "rtmr3": {
+  "policy": "zero"
+ },
+ "td_attributes": {
+  "debug": false
+ }
+}

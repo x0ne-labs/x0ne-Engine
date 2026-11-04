@@ -1,0 +1,16 @@
+[package]
+name = "x0ne-core-kernels"
+description = "Decode kernels as standalone .cu files with C linkage, compiled to cubin at build time (no PTX, no NVRTC)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+publish.workspace = true
+build = "build.rs"
+
+[build-dependencies]
+sha2.workspace = true
+
+[dev-dependencies]
+sha2.workspace = true

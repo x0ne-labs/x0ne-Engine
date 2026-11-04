@@ -1,0 +1,19 @@
+# Coverage image for `make coverage` (ci/coverage.sh): the CI image of ci/Containerfile
+# plus the llvm-tools component of the pinned toolchain (llvm-profdata, llvm-cov), which
+# the Rust project ships with the compiler. No third-party coverage tool. This build is
+# the only step that fetches anything; the measure itself has no network.
+#
+#   podman build --build-arg CI_IMAGE=localhost/x0ne-engine-ci:<tag> -f ci/Containerfile.coverage ci
+
+ARG CI_IMAGE
+FROM ${CI_IMAGE}
+# The toolchain of rust-toolchain.toml: llvm-profdata and llvm-cov must come from the LLVM that
+# rustc uses, or the profile format can mismatch. Links on PATH, under their plain names.
+ARG TOOLCHAIN=1.98.1-x86_64-unknown-linux-gnu
+RUN rustup component add llvm-tools --toolchain "${TOOLCHAIN}" \
+ && bin="$(rustc +"${TOOLCHAIN}" --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin" \
+ && ln -s "$bin/llvm-profdata" /usr/local/bin/llvm-profdata \
+ && ln -s "$bin/llvm-cov" /usr/local/bin/llvm-cov \
+ && llvm-profdata --version && llvm-cov --version
+LABEL org.opencontainers.image.title="x0ne-engine-coverage" \
+      org.opencontainers.image.description="x0ne-engine-ci plus the llvm-tools component of its toolchain, for make coverage. No network at run time."

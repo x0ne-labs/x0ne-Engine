@@ -1,0 +1,72 @@
+[package]
+name = "x0ne-sdk"
+description = "x0ne client SDK, prototype: checks a TD's attested OHTTP key on the caller's side (TDX quote to the pinned Intel root, live TCB from relayed collateral, measurements, key binding), then encrypts a question to that key (RFC 9458 over RFC 9180) so a proxy carries bytes it cannot read. Builds for wasm32-unknown-unknown."
+version.workspace = true
+edition.workspace = true
+license = "Apache-2.0"
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords = ["confidential", "attestation", "hpke", "ohttp", "wasm"]
+categories = ["cryptography", "wasm"]
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+# cdylib: the `.wasm` a page instantiates (wasm32-unknown-unknown); rlib: what
+# the native tests and x0ne-infer's bench link.
+crate-type = ["cdylib", "rlib"]
+# The quote and TCB verifiers are x0ne-infer's own files (src/lib.rs, #[path]).
+# Their test modules need x0ne-infer's fixtures: build.rs sets the `x0ne_sdk`
+# cfg that leaves them out, and this library has no unit tests of its own (every
+# test of this crate is under tests/). `cargo test --all-targets` builds the
+# library's test target even so, hence both.
+test = false
+doctest = false
+
+[features]
+# Lets the C ABI (`abi.rs`) take a root certificate other than Intel's, for the
+# wasm smoke test on the simulated bench, and the TEST archive key and TEST
+# transparency log for the reference (`attest::admit_reference_under_test_keys`).
+# Enabled by the dev-dependencies of this crate and of x0ne-infer only; a wasm
+# build without it pins Intel's root, x0ne's archive key and x0ne's log. On
+# wasm32, build.rs refuses it unless X0NE_SDK_BENCH=1 (build_guard.rs).
+test-anchor = ["test-archive-key"]
+# The cfg x0ne-infer's `archive_key.rs`, `openpgp.rs` and `transparency.rs`
+# compile their TEST key and TEST log under. Only `test-anchor` enables it.
+test-archive-key = []
+
+[dependencies]
+x0ne-confidential = { path = "../x0ne-confidential" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+base64.workspace = true
+# The same versions as x0ne-infer: nothing new in Cargo.lock but this crate.
+sha2 = "0.11"
+hmac = "0.13"
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
+curve25519-dalek = "5"
+ed25519-dalek = "3.0.0"
+zeroize = "1"
+# No default features: they bring `getrandom`, which wasm32-unknown-unknown lacks.
+# This crate never draws: the caller brings every random byte.
+p256 = { version = "0.14.0", default-features = false, features = ["ecdsa"] }
+x509-parser = "0.18.1"
+# NVIDIA's NRAS tokens (nras.rs): ES384 JWTs, leaves under a P-384 intermediate.
+# No default features: `std` brings `getrandom`. `pkcs8` reads keys and DER signatures.
+p384 = { version = "0.14.0", default-features = false, features = ["ecdsa", "pkcs8"] }
+# Google's launch endorsement (gce_endorsement.rs): RSASSA-PSS verification only;
+# NRAS leaves under Intermediate 004 (nras.rs): PKCS#1 v1.5.
+# No default features: `std` brings `getrandom` through rand_core.
+rsa = { version = "0.9.10", default-features = false, features = ["sha2", "u64_digit"] }
+# x0ne's archive key (openpgp.rs): OpenPGP v4 fingerprints are SHA-1. The
+# version x0ne-infer already locks.
+sha1 = "0.11"
+
+[dev-dependencies]
+x0ne-sdk = { path = ".", features = ["test-anchor"] }
+
+[lints]
+workspace = true

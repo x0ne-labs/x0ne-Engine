@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Fake gcloud for tests/gcp_cvm_recipe.rs: plays scripts/gcp-cvm.sh without a
+# cloud. Each call is appended to $FAKE_GCLOUD_LOG. `compute ssh --command` runs
+# the command in $FAKE_VM_HOME, the VM's home, with $FAKE_VM_BIN first in PATH
+# and nothing else of this environment; `compute scp` copies to and from it.
+# What only a real VM does (packages, reboot, GPU, an interactive shell) is
+# refused with 255, as an unreachable host would be.
+set -u
+: "${FAKE_VM_HOME:?}" "${FAKE_VM_BIN:?}" "${FAKE_GCLOUD_LOG:?}"
+printf '%s\n' "$*" >> "$FAKE_GCLOUD_LOG"
+[ "${1:-}" = compute ] || { echo "fake gcloud: only compute is played" >&2; exit 2; }
+shift
+case "${1:-} ${2:-}" in
+  "instances create") echo "Created [fake/instances/${3:-}]."; exit 0 ;;
+  "instances stop"|"instances delete") echo "fake: $2 ${3:-}"; exit 0 ;;
+  "instances list"|"disks list"|"addresses list") echo "Listed 0 items."; exit 0 ;;
+esac
+remote() { case $1 in *:~/*) printf '%s/%s' "$FAKE_VM_HOME" "${1#*:~/}" ;; *) return 1 ;; esac; }
+case "${1:-}" in
+  ssh)
+    shift 2
+    cmd=
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --command) cmd=$2; shift 2 ;;
+        --) break ;;
+        *) shift ;;
+      esac
+    done
+    [ -n "$cmd" ] || { echo "fake gcloud: an interactive shell needs a real VM" >&2; exit 255; }
+    case $cmd in
+      *apt-get*|*update-initramfs*|*reboot*|*nvidia-smi*|*modprobe*|*systemctl*)
+        echo "fake gcloud: needs a real VM, refused: ${cmd:0:60}" >&2; exit 255 ;;
+    esac
+    cd "$FAKE_VM_HOME" || exit 255
+    exec env -i HOME="$FAKE_VM_HOME" PATH="$FAKE_VM_BIN:/usr/bin:/bin" \
+      TMPDIR="$FAKE_VM_HOME/tmp" FAKE_INFER_BIN="${FAKE_INFER_BIN:-}" bash -c "$cmd" ;;
+  scp)
+    shift
+    src=$1 dst=$2
+    if r=$(remote "$dst"); then cp "$src" "$r"
+    elif r=$(remote "$src"); then cp "$r" "$dst"
+    else echo "fake gcloud: scp without a VM side" >&2; exit 2
+    fi ;;
+  *) echo "fake gcloud: compute $1 is not played" >&2; exit 2 ;;
+esac

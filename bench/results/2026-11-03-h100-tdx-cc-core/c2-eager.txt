@@ -1,0 +1,6 @@
+s20	prompt 20	gen 256	decode 108.55 tok/s (runs 108.55 108.61 108.54)	first token 0.008 s	ceiling 221.13 tok/s	49.1 %
+4k	prompt 3827	gen 256	decode 107.46 tok/s (runs 107.40 107.52 107.46)	first token 0.514 s	ceiling 213.23 tok/s	50.4 %
+# ceiling: H100 SXM 80GB (NVIDIA H100 datasheet: 3.35 TB/s), 3352 GB/s; bf16 weights (active bytes for a MoE) and KV; mean ctx = prompt + generated/2
+label	prompt	gen	mean_ctx	GB/token	ceiling_tok_s	floor_ms	measured_tok_s	measured_ms	%ceiling	remainder_ms
+s20	20	256	148	15.1586	221.13	4.522	108.55	9.212	49.09	4.690
+4k	3827	256	3955	15.7200	213.23	4.690	107.46	9.306	50.39	4.616

@@ -1,0 +1,25 @@
+[[0;32m  OK  [0m] Started [0;1;39mx0ne-infer.service[0m - x0ne confidential inference server (I5).
+x0ne-cvm-status: begin uptime_s=30
+x0ne-cvm-status: infer=Result=exit-code NRestarts=0 ExecMainStatus=76 ActiveState=activating SubState=auto-restart
+x0ne-cvm-status: unit_x0ne-ccel=Result=success ExecMainStatus=0 ActiveState=active
+x0ne-cvm-status: unit_x0ne-tsm-report=Result=success ExecMainStatus=0 ActiveState=active
+x0ne-cvm-status: unit_x0ne-nvidia-nodes=Result=success ExecMainStatus=0 ActiveState=active
+x0ne-cvm-status: unit_x0ne-gpu-ready=Result=success ExecMainStatus=0 ActiveState=active
+x0ne-cvm-status: unit_nvidia-persistenced=Result=success ExecMainStatus=0 ActiveState=active
+x0ne-cvm-status: listen_tcp=
+x0ne-cvm-status: failed_units=
+x0ne-cvm-status: models_gib=0 mem_available_gib=226
+x0ne-cvm-status: infer_tail=Started x0ne-infer.service - x0ne confidential inference server (I5).|x0ne-infer: live TCB verification failed: TCB status OutOfDate for FMSPC 00806f050000 is not accepted (level dated 2026-02-11T00:00:00Z)|x0ne-infer.service: Main process exited, code=exited, status=76/PROTOCOL|x0ne-infer.service: Failed with result 'exit-code'.|x0ne-infer.service: Consumed 907ms CPU time, 275.6M memory peak.|
+x0ne-cvm-status: end
+x0ne-cvm-status: begin uptime_s=61
+x0ne-cvm-status: infer=Result=exit-code NRestarts=3 ExecMainStatus=76 ActiveState=activating SubState=auto-restart
+x0ne-cvm-status: unit_x0ne-ccel=Result=success ExecMainStatus=0 ActiveState=active
+x0ne-cvm-status: unit_x0ne-tsm-report=Result=success ExecMainStatus=0 ActiveState=active
+x0ne-cvm-status: unit_x0ne-nvidia-nodes=Result=success ExecMainStatus=0 ActiveState=active
+x0ne-cvm-status: unit_x0ne-gpu-ready=Result=success ExecMainStatus=0 ActiveState=active
+x0ne-cvm-status: unit_nvidia-persistenced=Result=success ExecMainStatus=0 ActiveState=active
+x0ne-cvm-status: listen_tcp=
+x0ne-cvm-status: failed_units=
+x0ne-cvm-status: models_gib=0 mem_available_gib=226
+x0ne-cvm-status: infer_tail=x0ne-infer.service: Failed with result 'exit-code'.|x0ne-infer.service: Consumed 169ms CPU time, 126M memory peak.|x0ne-infer.service: Scheduled restart job, restart counter is at 3.|Started x0ne-infer.service - x0ne confidential inference server (I5).|x0ne-infer: live TCB verification failed: TCB status OutOfDate for FMSPC 00806f050000 is not accepted (level dated 2026-02-11T00:00:00Z)|x0ne-infer.service: Main process exited, code=exited, status=76/PROTOCOL|x0ne-infer.service: Failed with result 'exit-code'.|x0ne-infer.service: Consumed 178ms CPU time, 126M memory peak.|
+x0ne-cvm-status: end

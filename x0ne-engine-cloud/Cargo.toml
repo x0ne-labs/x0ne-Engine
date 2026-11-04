@@ -1,0 +1,47 @@
+[package]
+name = "x0ne-engine-cloud"
+description = "x0ne Engine cloud lifecycle: quote, create, watch and delete a confidential GPU VM. It holds the cloud token; the attested relay holds the questions."
+version.workspace = true
+edition.workspace = true
+license = "AGPL-3.0-only"
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords = ["confidential", "tdx", "gcp", "lifecycle"]
+categories = ["command-line-utilities"]
+rust-version.workspace = true
+publish.workspace = true
+
+# Started by `x0ne-engine cloud …` (exec), from the same directory or from
+# /usr/libexec/x0ne-engine. Never looked up in $PATH.
+[[bin]]
+name = "x0ne-engine-cloud"
+path = "src/main.rs"
+
+[features]
+# The loopback API override the integration tests use. Never a default, and
+# http.rs refuses to compile with it outside debug builds.
+test-endpoints = []
+
+[dependencies]
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+base64.workspace = true
+sha2 = "0.11"
+zeroize = "1"
+libc = "0.2"
+# The model catalog the relay embeds, read at build time (src/catalog.rs).
+toml = "0.8"
+
+[dev-dependencies]
+axum.workspace = true
+tempfile.workspace = true
+# Enables the override for this crate's own tests and the binary they run;
+# `cargo build --release` does not see dev-dependencies.
+x0ne-engine-cloud = { path = ".", features = ["test-endpoints"] }
+
+[lints]
+workspace = true

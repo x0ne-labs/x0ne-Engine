@@ -1,0 +1,4 @@
+# Same compiler as Containerfile (rust:1.98.1-slim-bookworm) and Cargo.toml rust-version.
+[toolchain]
+channel = "1.98.1"
+components = ["clippy", "rustfmt"]

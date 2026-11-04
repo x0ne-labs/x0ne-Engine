@@ -1,0 +1,23 @@
+[[0;32m  OK  [0m] Finished [0;1;39mx0ne-boot-report.service[0m …serial console (public facts only).
+x0ne-cvm-status: begin uptime_s=31
+x0ne-cvm-status: infer=Result=success NRestarts=0 ExecMainCode=0 ExecMainStatus=0 ActiveState=active SubState=running
+x0ne-cvm-status: unit_x0ne-ccel=Result=success ExecMainStatus=0 ActiveState=active
+x0ne-cvm-status: unit_x0ne-tsm-report=Result=success ExecMainStatus=0 ActiveState=active
+x0ne-cvm-status: unit_x0ne-nvidia-nodes=Result=success ExecMainStatus=0 ActiveState=active
+x0ne-cvm-status: unit_x0ne-gpu-ready=Result=success ExecMainStatus=0 ActiveState=active
+x0ne-cvm-status: unit_nvidia-persistenced=Result=success ExecMainStatus=0 ActiveState=active
+x0ne-cvm-status: listen_tcp=
+x0ne-cvm-status: failed_units=
+x0ne-cvm-status: models_gib=0 mem_available_gib=223
+x0ne-cvm-status: end
+x0ne-cvm-status: begin uptime_s=62
+x0ne-cvm-status: infer=Result=exit-code NRestarts=0 ExecMainCode=1 ExecMainStatus=103 ActiveState=failed SubState=failed
+x0ne-cvm-status: unit_x0ne-ccel=Result=success ExecMainStatus=0 ActiveState=active
+x0ne-cvm-status: unit_x0ne-tsm-report=Result=success ExecMainStatus=0 ActiveState=active
+x0ne-cvm-status: unit_x0ne-nvidia-nodes=Result=success ExecMainStatus=0 ActiveState=active
+x0ne-cvm-status: unit_x0ne-gpu-ready=Result=success ExecMainStatus=0 ActiveState=active
+x0ne-cvm-status: unit_nvidia-persistenced=Result=success ExecMainStatus=0 ActiveState=active
+x0ne-cvm-status: listen_tcp=
+x0ne-cvm-status: failed_units=x0ne-infer.service 
+x0ne-cvm-status: models_gib=0 mem_available_gib=206
+x0ne-cvm-status: end

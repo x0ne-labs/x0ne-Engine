@@ -1,0 +1,20 @@
+engine: NVIDIA H100 80GB HBM3 (cc 9.0, 132 SMs, cubin sm_90a), driver 13020, cuBLAS 130400, arena 22836026400 bytes, decode graph 439 nodes, decode attention split-K P 49 (grid 8 x 49, 4 q heads per block, 3 blocks per SM, merge Kernel), feed-forward dense
+MEASURE qwen3_8b short Decode seconds 0.70
+MEASURE qwen3_8b short Decode kl_mean 9.5615e-5 kl_p99 2.0318e-3 kl_max 2.0318e-3 rows 84
+MEASURE qwen3_8b 4k Decode seconds 31.93
+MEASURE qwen3_8b 4k Decode kl_mean 4.3415e-5 kl_p99 6.3433e-4 kl_max 6.3433e-4 rows 86
+MEASURE qwen3_8b short Decode perplexity 11.792753 reference 11.814904 rel -1.8748e-3
+MEASURE qwen3_8b 4k Decode perplexity 2.083720 reference 2.083034 rel 3.2887e-4
+MEASURE qwen3_8b short Decode top1_agreement 1.000000
+MEASURE qwen3_8b 4k Decode top1_agreement 0.994251
+MEASURE qwen3_8b short first_greedy 32 reference 32
+MEASURE qwen3_8b 4k first_greedy 32 reference 32
+MEASURE qwen3_8b short Prefill seconds 0.06
+MEASURE qwen3_8b short Prefill kl_mean 9.4887e-5 kl_p99 1.6950e-3 kl_max 1.6950e-3 rows 84
+MEASURE qwen3_8b 4k Prefill seconds 1.35
+MEASURE qwen3_8b 4k Prefill kl_mean 5.7650e-5 kl_p99 7.9611e-4 kl_max 7.9611e-4 rows 86
+MEASURE qwen3_8b short Prefill perplexity 11.784971 reference 11.814904 rel -2.5335e-3
+MEASURE qwen3_8b 4k Prefill perplexity 2.083849 reference 2.083034 rel 3.9093e-4
+MEASURE qwen3_8b short Prefill top1_agreement 1.000000
+MEASURE qwen3_8b 4k Prefill top1_agreement 0.997648
+MEASURE qwen3_8b device_free_bytes before 60849324032 after 60849324032

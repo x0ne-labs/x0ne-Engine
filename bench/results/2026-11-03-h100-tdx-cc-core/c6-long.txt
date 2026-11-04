@@ -1,0 +1,10 @@
+
+running 5 tests
+test n3_prefill_route_unchanged ... ok
+test n4_decode_relative_to_e2 ... ok
+test n5_decode_logit_gap ... ok
+test n6_greedy_matches_e2_on_the_bench_prompts ... ok
+test split_k_is_the_default ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 147.90s
+

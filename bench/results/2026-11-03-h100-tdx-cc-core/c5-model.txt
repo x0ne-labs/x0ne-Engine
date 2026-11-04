@@ -1,0 +1,16 @@
+
+running 11 tests
+test client_data_zero_after_requests ... ok
+test decode_kl_per_position ... ok
+test decode_perplexity_within_gate ... ok
+test decode_top1_agreement ... ok
+test first_greedy_token_matches ... ok
+test prefill_kl_per_position ... ok
+test prefill_perplexity_within_gate ... ok
+test prefill_top1_agreement ... ok
+test request_after_another_is_unchanged ... ok
+test same_request_twice_is_bit_identical ... ok
+test steady_state_allocates_nothing ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 50.58s
+

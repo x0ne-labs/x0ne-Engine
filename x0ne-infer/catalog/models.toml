@@ -1,0 +1,136 @@
+# The x0ne model catalog: what `x0ne-engine pull <name>` may download.
+#
+# Every entry pins a Hugging Face commit (40 hex) and the size and sha256 of
+# each file it takes. `pull` refuses a file whose bytes differ, before the
+# model becomes usable. Only safetensors weights, JSON configs and licence
+# texts are accepted: no pickle (.bin, .pt), no Python, no remote code.
+#
+# Each digest was measured by downloading the file at the pinned revision on
+# the date written in `measured`, and cross-checked against the LFS sha256
+# the Hub API publishes where it publishes one. To add an entry: same
+# procedure, then `cargo test -p x0ne-infer registry` (the catalog is parsed
+# and validated by the tests, and again by the binary at start-up).
+#
+# digest_sha256 is the served-model digest (v2, docs/cloud.md): the sha256 of
+# "x0ne-model-digest/2\n" followed by the sha256sum lines of config.json,
+# tokenizer.json and the weights (model.safetensors, or the index and every
+# shard), sorted by name; LICENSE and NOTICE are left out. It follows from the
+# sha256s listed, and the parser refuses a pin that does not. Without it, cloud
+# mode does not serve the entry.
+
+schema = 1
+
+[[model]]
+name = "qwen3:0.6b"
+repo = "Qwen/Qwen3-0.6B"
+revision = "c1899de289a04d12100db370d81485cdf75e47ca"
+architecture = "qwen3"
+license = "Apache-2.0"
+openness = "open-weights"
+measured = "2026-10-10"
+digest_sha256 = "b430888f3024072a1e7dd46e501bca046ed5fdd8e74397e3068a9a66d575d2a4"
+files = [
+  { path = "config.json", size = 726, sha256 = "660db3b73d788119c04535e48cf9be5f55bc3100841a718637ae695b442f27dd" },
+  { path = "tokenizer.json", size = 11422654, sha256 = "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4" },
+  { path = "model.safetensors", size = 1503300328, sha256 = "f47f71177f32bcd101b7573ec9171e6a57f4f4d31148d38e382306f42996874b" },
+  { path = "LICENSE", size = 11343, sha256 = "832dd9e00a68dd83b3c3fb9f5588dad7dcf337a0db50f7d9483f310cd292e92e" },
+]
+
+# Two shards on the Hub: pull verifies both; the engine maps them as
+# published, no merge (shards.rs).
+[[model]]
+name = "qwen3:1.7b"
+repo = "Qwen/Qwen3-1.7B"
+revision = "70d244cc86ccca08cf5af4e1e306ecf908b1ad5e"
+architecture = "qwen3"
+license = "Apache-2.0"
+measured = "2026-10-10"
+digest_sha256 = "24d5d12d410a39c0349f16d8f491bc826bf5779e284dfff04fced644383b7dba"
+files = [
+  { path = "config.json", size = 726, sha256 = "1ddb5b89ebc90dcb417a45c213d818577e65976454d29385c8f6140771d95197" },
+  { path = "tokenizer.json", size = 11422654, sha256 = "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4" },
+  { path = "model.safetensors.index.json", size = 25605, sha256 = "0d660e94b165eb912669a5249dff44b83188c4777a07ddb9611fb78d91b0578d" },
+  { path = "model-00001-of-00002.safetensors", size = 3441185608, sha256 = "169ad53ec313c3a34b06c0809216e4fc072cce444a5d4ff2b59690d064130ed5" },
+  { path = "model-00002-of-00002.safetensors", size = 622329984, sha256 = "912becff8d60672aa8628ef08c05898d9adf17c2ad4ae3caf99b065622fdeff9" },
+  { path = "LICENSE", size = 11343, sha256 = "832dd9e00a68dd83b3c3fb9f5588dad7dcf337a0db50f7d9483f310cd292e92e" },
+]
+
+# Qwen3 dense models, bf16, sharded on the Hub. Digests read 2026-10-16 from
+# the Hub API tree at the pinned commit: LFS sha256 for shards and tokenizer,
+# small files downloaded and matched to their git blob id.
+
+[[model]]
+name = "qwen3:8b"
+repo = "Qwen/Qwen3-8B"
+revision = "b968826d9c46dd6066d109eabc6255188de91218"
+architecture = "qwen3"
+license = "Apache-2.0"
+measured = "2026-10-16"
+# v1 until 0.2.0-beta.6: d750e7af..., the digest in the receipts of the 2026-10-17 run.
+digest_sha256 = "e1776f7c45e778bbca09ccad38b8b57508da04d862019453ad287cf6715a3b81"
+files = [
+  { path = "config.json", size = 728, sha256 = "f7c4eadfbbf522470667b797a3c89be2524832d2d599797248dc304fff447c30" },
+  { path = "tokenizer.json", size = 11422654, sha256 = "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4" },
+  { path = "model.safetensors.index.json", size = 32878, sha256 = "f9fdbcb91c23971c13ec5d5f2573d2349e8f61f2f049371ec699281748fdb1bc" },
+  { path = "model-00001-of-00005.safetensors", size = 3996250744, sha256 = "31d6a825ae35f11fb85b195b4c42c146c051e446433125a215336abdf95cbf5f" },
+  { path = "model-00002-of-00005.safetensors", size = 3993160032, sha256 = "5991236cea6fe21f3d43cab0f0e84448734fbbe0789816202989f2ddc9d18282" },
+  { path = "model-00003-of-00005.safetensors", size = 3959604768, sha256 = "c5185c4794be2d8a9784d5753c9922db38df478ce11f9ed0b415b7304d896836" },
+  { path = "model-00004-of-00005.safetensors", size = 3187841392, sha256 = "b5ee7de71fbf17db3d5704e0c8f2bc7d005ca9e1d7ca2aeb19827b0cfcaa917a" },
+  { path = "model-00005-of-00005.safetensors", size = 1244659840, sha256 = "20c2d6366ab85c90786ccdd829cd2b9e7d30ef3b2ebbb998280e7e4014b542ff" },
+  { path = "LICENSE", size = 11343, sha256 = "832dd9e00a68dd83b3c3fb9f5588dad7dcf337a0db50f7d9483f310cd292e92e" },
+]
+
+[[model]]
+name = "qwen3:14b"
+repo = "Qwen/Qwen3-14B"
+revision = "40c069824f4251a91eefaf281ebe4c544efd3e18"
+architecture = "qwen3"
+license = "Apache-2.0"
+measured = "2026-10-16"
+digest_sha256 = "a59e04e0949a1f57b3c602fc728a5c8577e9ad06ebc96455259d1fd68452ea1f"
+files = [
+  { path = "config.json", size = 728, sha256 = "e73c3664ca09b10a673fef0c22e8a6b456201d49bd4713c9691f775720e8857a" },
+  { path = "tokenizer.json", size = 11422654, sha256 = "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4" },
+  { path = "model.safetensors.index.json", size = 36514, sha256 = "62d7ad35757bae5e7baa452cb1483178b7daa50e869e923226b8da10871f7ebc" },
+  { path = "model-00001-of-00008.safetensors", size = 3841788544, sha256 = "e942bdbdf08857d16a8fef7d1dae9fceabeb4e84def6043485fe2f6f085dab0e" },
+  { path = "model-00002-of-00008.safetensors", size = 3963750816, sha256 = "f7c9c6eee628f5ad831d2d1d292e120505e5fcadeb38f88b4d3c4cb86306ccf9" },
+  { path = "model-00003-of-00008.safetensors", size = 3963750880, sha256 = "dfb8c5df9404b41ad6ae74e8b6b367135f017b4467b884cf71b17c71954f18a9" },
+  { path = "model-00004-of-00008.safetensors", size = 3963750880, sha256 = "eab286fec759e3e59ab228621aefa0fef14ed56039e06f959e67257d5af7604d" },
+  { path = "model-00005-of-00008.safetensors", size = 3963750880, sha256 = "97f0dc2992e59da95c466eff6f4fd0c8335843bbc36ed5c913a6f5150748c0e6" },
+  { path = "model-00006-of-00008.safetensors", size = 3963750880, sha256 = "9e8e76a013cd5e253865b792991e0b410f869b136b3c500079b531b09198e99e" },
+  { path = "model-00007-of-00008.safetensors", size = 3963750880, sha256 = "0aee70ee6e91dc00d818804fb47f124d13ee4ad5b4a64553e09dbf9391cd5750" },
+  { path = "model-00008-of-00008.safetensors", size = 1912371880, sha256 = "0d6b92296e326d39bbbaeb32c3ec454ac606da843d4c8ffa8edf010b62b8c9e0" },
+  { path = "LICENSE", size = 11343, sha256 = "832dd9e00a68dd83b3c3fb9f5588dad7dcf337a0db50f7d9483f310cd292e92e" },
+]
+
+[[model]]
+name = "qwen3:32b"
+repo = "Qwen/Qwen3-32B"
+revision = "9216db5781bf21249d130ec9da846c4624c16137"
+architecture = "qwen3"
+license = "Apache-2.0"
+measured = "2026-10-16"
+digest_sha256 = "745f026c07a33ff5c1b704b04efff392168f4312244e9d1027f26b0c9ae10f51"
+files = [
+  { path = "config.json", size = 728, sha256 = "97e295b63283935788fac5e4f8860862a56d4089538cafc93f0431f2ebe483bb" },
+  { path = "tokenizer.json", size = 11422654, sha256 = "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4" },
+  { path = "model.safetensors.index.json", size = 58330, sha256 = "bed42c6c55274bc08a1f616bceb3bcb84b3f02cb6584c573bd18c6519291ecd0" },
+  { path = "model-00001-of-00017.safetensors", size = 3957109648, sha256 = "52562b2ff97b61764260273e71bf5b4cf8a66f569399398f26dec0300fcf1316" },
+  { path = "model-00002-of-00017.safetensors", size = 3900791760, sha256 = "e26764b2c6878e3fb7198895fa833ec62838d84a19665e6abfbae43c6daf02b3" },
+  { path = "model-00003-of-00017.safetensors", size = 3900791760, sha256 = "6c5ba7bed9c52bc121e75cbe8a7be46936d0006cc80f42a6d5886ed40b4c2a62" },
+  { path = "model-00004-of-00017.safetensors", size = 3900791800, sha256 = "f736f6ac4d8c30866107fb1185a05b3c3cfce9717720082f466fa44e691bcec8" },
+  { path = "model-00005-of-00017.safetensors", size = 3900791800, sha256 = "a52ed375c083209c54d42ac510afeb1fbb5af4f193be2dc7d103f665a0f212d3" },
+  { path = "model-00006-of-00017.safetensors", size = 3900791800, sha256 = "37fae28990b0e4a70228549d040c0393e87bee3820d59e58e47844974d8dff5b" },
+  { path = "model-00007-of-00017.safetensors", size = 3900791800, sha256 = "37776006aeaba29eca8bc73b2b963fe3477e1c2e3f6a27cb9527be75b905e1bf" },
+  { path = "model-00008-of-00017.safetensors", size = 3900791800, sha256 = "73e74e9129674fe330948005075d70ab4fa0b92b68fb220c5a693f9cea553730" },
+  { path = "model-00009-of-00017.safetensors", size = 3900791800, sha256 = "a044b3602a01bd8ea62ff51badf9cc038ab1d73d97399480e6a55b4c86fa7fa6" },
+  { path = "model-00010-of-00017.safetensors", size = 3900791800, sha256 = "9966612ba7ecfc2cd2e592fb95224b86d743271ff88e172cc272a4b26382aa75" },
+  { path = "model-00011-of-00017.safetensors", size = 3900791800, sha256 = "e2a058a0ac7d4b992b731c29221ecfb4b76b8a48d9004d0e8a62ba44f699845c" },
+  { path = "model-00012-of-00017.safetensors", size = 3900791800, sha256 = "58a1aa89093fea07325f787072a468e3482a470ff4b7fe5ead5f749683907c40" },
+  { path = "model-00013-of-00017.safetensors", size = 3900791800, sha256 = "35f3381bab31a23370c37d922290aeecdf603418336058fb86fe42d8f51ac40c" },
+  { path = "model-00014-of-00017.safetensors", size = 3900791800, sha256 = "8713b062ddc178acf5917610b7f4b64eede833b2ea4aa37bd562dcf2f3a3339d" },
+  { path = "model-00015-of-00017.safetensors", size = 3900791800, sha256 = "bec439d23931821a236d8f62fa79deecf5551bd25602278aa2ae0ce432b378cf" },
+  { path = "model-00016-of-00017.safetensors", size = 3900791800, sha256 = "e569139fadd61fe7c8f9eb1c976d9a627cae48c57ddf228cfbd0593c59c64ff7" },
+  { path = "model-00017-of-00017.safetensors", size = 3055341992, sha256 = "1f47c318fcd7797c0f85b4233cb754438b10e795b8bc874889090c416a94bd38" },
+  { path = "LICENSE", size = 11343, sha256 = "832dd9e00a68dd83b3c3fb9f5588dad7dcf337a0db50f7d9483f310cd292e92e" },
+]

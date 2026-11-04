@@ -1,0 +1,22 @@
+{
+  "schema": "x0ne-engine/reference/v1",
+  "provider": "gcp",
+  "tee": "intel-tdx",
+  "image": {
+    "name": "x0ne-cvm",
+    "version": "0.1.0",
+    "gcp_image": "x0ne-cvm-0-1-0",
+    "disk_tar_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "source": {"x0ne_os": "TEST fixture, not an image"}
+  },
+  "mrtd": {
+    "policy": "gce-launch-endorsement",
+    "root_spki_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "ram_gib": {"a3-highgpu-1g": 0}
+  },
+  "rtmr0": {"policy": "report", "known": {"a3-highgpu-1g": []}},
+  "rtmr1": {"policy": "eventlog", "boot_applications_sha384": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]},
+  "rtmr2": {"policy": "eventlog", "events_sha384": {".linux": "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"}},
+  "rtmr3": {"policy": "zero"},
+  "td_attributes": {"debug": false}
+}

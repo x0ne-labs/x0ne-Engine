@@ -1,0 +1,6 @@
+/target
+**/*.rs.bk
+*.sealed
+
+# Local CI results (make ci)
+/out/

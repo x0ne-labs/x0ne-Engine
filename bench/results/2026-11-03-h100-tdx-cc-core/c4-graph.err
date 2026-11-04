@@ -1,0 +1,7 @@
+engine: NVIDIA H100 80GB HBM3 (cc 9.0, 132 SMs, cubin sm_90a), driver 13020, cuBLAS 130400, arena 22836026400 bytes, decode graph 439 nodes, decode attention split-K P 49 (grid 8 x 49, 4 q heads per block, 3 blocks per SM, merge Kernel), feed-forward dense
+MEASURE qwen3_8b 1000 requests seconds 33.1 free_bytes 60824158208 drift []
+MEASURE qwen3_8b graph_vs_eager decode rows 84 differing 0
+MEASURE qwen3_8b graph_vs_eager greedy tokens 64 common_prefix 64
+MEASURE qwen3_8b graph_nodes 439 layers 36 minimum 330
+MEASURE qwen3_8b counts n=8 Counts { kernel_launches: 183, graph_launches: 7, gemms: 145, htod: 3, dtoh: 8, memsets: 17, syncs: 21 }
+MEASURE qwen3_8b counts n=40 Counts { kernel_launches: 183, graph_launches: 39, gemms: 145, htod: 3, dtoh: 40, memsets: 17, syncs: 21 }

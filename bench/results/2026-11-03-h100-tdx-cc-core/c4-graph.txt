@@ -1,0 +1,11 @@
+
+running 6 tests
+test device_memory_stable_over_1000_requests ... ok
+test graph_decode_logits_equal_eager_bitwise ... ok
+test graph_greedy_equals_eager ... ok
+test graph_has_the_nodes_of_one_step ... ok
+test graph_step_is_one_launch_and_one_copy ... ok
+test graph_two_executions_identical ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 44.80s
+

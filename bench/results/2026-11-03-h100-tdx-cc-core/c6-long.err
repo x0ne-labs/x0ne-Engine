@@ -1,0 +1,23 @@
+engine: NVIDIA H100 80GB HBM3 (cc 9.0, 132 SMs, cubin sm_90a), driver 13020, cuBLAS 130400, arena 22836026400 bytes, decode graph 439 nodes, decode attention split-K P 49 (grid 8 x 49, 4 q heads per block, 3 blocks per SM, merge Kernel), feed-forward dense
+MEASURE qwen3_8b short Prefill PerHead seconds 0.09
+MEASURE qwen3_8b short Prefill SplitK seconds 0.05
+MEASURE qwen3_8b short prefill E2 vs E3: rows equal true stats equal true
+MEASURE qwen3_8b 4k Prefill PerHead seconds 1.38
+MEASURE qwen3_8b 4k Prefill SplitK seconds 1.33
+MEASURE qwen3_8b 4k prefill E2 vs E3: rows equal true stats equal true
+MEASURE qwen3_8b short Decode PerHead seconds 0.74
+MEASURE qwen3_8b short Decode SplitK seconds 0.70
+MEASURE qwen3_8b short decode E2 Quality { kl_mean: 9.561541427717489e-5, kl_p99: 0.002031753776116678, top1: 1.0, perplexity_rel: -0.0018748420078055217, max_abs_vs_ref: 0.4082261323928833 }
+MEASURE qwen3_8b short decode E3 Quality { kl_mean: 9.561541427717489e-5, kl_p99: 0.002031753776116678, top1: 1.0, perplexity_rel: -0.0018748420078055217, max_abs_vs_ref: 0.4082261323928833 }
+MEASURE qwen3_8b 4k Decode PerHead seconds 41.22
+MEASURE qwen3_8b 4k Decode SplitK seconds 31.91
+MEASURE qwen3_8b 4k decode E2 Quality { kl_mean: 4.563117993505348e-5, kl_p99: 0.0008629346603268393, top1: 0.9937287692709694, perplexity_rel: 0.00041426990512904993, max_abs_vs_ref: 3.7235970497131348 }
+MEASURE qwen3_8b 4k decode E3 Quality { kl_mean: 4.34145216936844e-5, kl_p99: 0.0006343333399524599, top1: 0.994251371831722, perplexity_rel: 0.0003288728294581489, max_abs_vs_ref: 4.092378616333008 }
+MEASURE qwen3_8b short decode max|E3 - E2| 0.0000e0 max|E2 - f32| 4.0823e-1 rows 84
+MEASURE qwen3_8b 4k decode max|E3 - E2| 3.6471e0 max|E2 - f32| 3.7236e0 rows 86
+MEASURE qwen3_8b s20 greedy E2 vs E3: common prefix 171 of 256; at 171 E2 86084 E3 42966, E2 top-2 margin 1.4206e-2 (argmax 86084)
+MEASURE qwen3_8b s31 greedy E2 vs E3: common prefix 256 of 256
+MEASURE qwen3_8b 4k greedy E2 vs E3: common prefix 256 of 256
+MEASURE qwen3_8b 8k greedy E2 vs E3: common prefix 256 of 256
+MEASURE qwen3_8b 16k greedy E2 vs E3: common prefix 208 of 256; at 208 E2 17654 E3 7299, E2 top-2 margin 3.2204e-2 (argmax 17654)
+MEASURE qwen3_8b decode attention SplitK splits 49: NVIDIA H100 80GB HBM3 (cc 9.0, 132 SMs, cubin sm_90a), driver 13020, cuBLAS 130400, arena 22836026400 bytes, decode graph 439 nodes, decode attention split-K P 49 (grid 8 x 49, 4 q heads per block, 3 blocks per SM, merge Kernel), feed-forward dense

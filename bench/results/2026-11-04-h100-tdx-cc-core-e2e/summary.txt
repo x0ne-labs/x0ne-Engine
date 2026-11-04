@@ -1,0 +1,42 @@
+warm       HTTP 200 prompt 58 out 16 (length) counted 16 frames 2 first 0.203 s last 0.302 s final 1.004 s span 60.32 fit None tok/s gap med 99.47 ms
+p535-r1    HTTP 200 prompt 58 out 1024 (length) counted 1024 frames 75 first 0.208 s last 7.61 s final 8.012 s span 136.858 fit 137.26 tok/s gap med 99.951 ms
+p1k-r1     HTTP 200 prompt 548 out 1024 (length) counted 1024 frames 76 first 0.208 s last 7.706 s final 8.012 s span 135.759 fit 136.265 tok/s gap med 100.041 ms
+p4k-r1     HTTP 200 prompt 3568 out 1024 (length) counted 1024 frames 80 first 0.705 s last 8.605 s final 8.909 s span 128.861 fit 128.952 tok/s gap med 100.106 ms
+p8k-r1     HTTP 200 prompt 7468 out 1024 (length) counted 1024 frames 85 first 2.098 s last 10.497 s final 10.601 s span 121.44 fit 122.405 tok/s gap med 100.076 ms
+p16k-r1    HTTP 200 prompt 16068 out 1024 (length) counted 1024 frames 89 first 8.025 s last 16.822 s final 17.829 s span 116.188 fit 116.567 tok/s gap med 100.19 ms
+p535-r2    HTTP 200 prompt 58 out 1024 (length) counted 1024 frames 75 first 0.2 s last 7.6 s final 8.01 s span 136.887 fit 137.286 tok/s gap med 100.005 ms
+p1k-r2     HTTP 200 prompt 548 out 1024 (length) counted 1024 frames 76 first 0.209 s last 7.704 s final 8.011 s span 135.554 fit 136.314 tok/s gap med 100.122 ms
+p4k-r2     HTTP 200 prompt 3568 out 1024 (length) counted 1024 frames 80 first 0.708 s last 8.608 s final 8.917 s span 128.98 fit 128.968 tok/s gap med 100.188 ms
+p8k-r2     HTTP 200 prompt 7468 out 1024 (length) counted 1024 frames 85 first 2.093 s last 10.493 s final 10.598 s span 121.306 fit 122.329 tok/s gap med 99.96 ms
+p16k-r2    HTTP 200 prompt 16068 out 1024 (length) counted 1024 frames 89 first 8.054 s last 16.862 s final 17.87 s span 115.923 fit 116.593 tok/s gap med 99.959 ms
+p535-r3    HTTP 200 prompt 58 out 1024 (length) counted 1024 frames 75 first 0.202 s last 7.602 s final 8.019 s span 136.894 fit 137.281 tok/s gap med 100.143 ms
+p1k-r3     HTTP 200 prompt 548 out 1024 (length) counted 1024 frames 76 first 0.208 s last 7.707 s final 8.018 s span 135.476 fit 136.288 tok/s gap med 100.041 ms
+p4k-r3     HTTP 200 prompt 3568 out 1024 (length) counted 1024 frames 80 first 0.699 s last 8.598 s final 8.902 s span 128.995 fit 128.955 tok/s gap med 99.967 ms
+p8k-r3     HTTP 200 prompt 7468 out 1024 (length) counted 1024 frames 85 first 2.108 s last 10.508 s final 10.625 s span 121.304 fit 122.301 tok/s gap med 99.988 ms
+p16k-r3    HTTP 200 prompt 16068 out 1024 (length) counted 1024 frames 89 first 8.027 s last 16.832 s final 17.833 s span 116.071 fit 116.581 tok/s gap med 100.079 ms
+p535-r4    HTTP 200 prompt 58 out 1024 (length) counted 1024 frames 75 first 0.208 s last 7.602 s final 8.003 s span 137.01 fit 137.296 tok/s gap med 99.386 ms
+p1k-r4     HTTP 200 prompt 548 out 1024 (length) counted 1024 frames 76 first 0.205 s last 7.704 s final 8.009 s span 135.475 fit 136.259 tok/s gap med 100.007 ms
+p4k-r4     HTTP 200 prompt 3568 out 1024 (length) counted 1024 frames 80 first 0.705 s last 8.606 s final 8.912 s span 128.975 fit 128.96 tok/s gap med 100.159 ms
+p8k-r4     HTTP 200 prompt 7468 out 1024 (length) counted 1024 frames 84 first 2.095 s last 10.395 s final 10.608 s span 122.651 fit 122.525 tok/s gap med 100.144 ms
+p16k-r4    HTTP 200 prompt 16068 out 1024 (length) counted 1024 frames 88 first 8.116 s last 16.816 s final 17.824 s span 116.665 fit 116.459 tok/s gap med 100.073 ms
+p535-r5    HTTP 200 prompt 58 out 1024 (length) counted 1024 frames 75 first 0.202 s last 7.61 s final 8.006 s span 136.73 fit 137.291 tok/s gap med 100.167 ms
+p1k-r5     HTTP 200 prompt 548 out 1024 (length) counted 1024 frames 76 first 0.204 s last 7.704 s final 8.005 s span 135.468 fit 136.259 tok/s gap med 99.972 ms
+p4k-r5     HTTP 200 prompt 3568 out 1024 (length) counted 1024 frames 80 first 0.708 s last 8.607 s final 8.912 s span 128.996 fit 128.998 tok/s gap med 100.094 ms
+p8k-r5     HTTP 200 prompt 7468 out 1024 (length) counted 1024 frames 84 first 2.096 s last 10.401 s final 10.602 s span 122.698 fit 122.505 tok/s gap med 99.909 ms
+p16k-r5    HTTP 200 prompt 16068 out 1024 (length) counted 1024 frames 88 first 8.155 s last 16.852 s final 17.864 s span 116.702 fit 116.52 tok/s gap med 100.018 ms
+p535-r6    HTTP 200 prompt 58 out 1024 (length) counted 1024 frames 75 first 0.206 s last 7.607 s final 8.009 s span 136.874 fit 137.298 tok/s gap med 100.064 ms
+p1k-r6     HTTP 200 prompt 548 out 1024 (length) counted 1024 frames 76 first 0.208 s last 7.707 s final 8.009 s span 135.487 fit 136.255 tok/s gap med 100.066 ms
+p4k-r6     HTTP 200 prompt 3568 out 1024 (length) counted 1024 frames 80 first 0.706 s last 8.606 s final 8.908 s span 128.987 fit 129.004 tok/s gap med 99.932 ms
+p8k-r6     HTTP 200 prompt 7468 out 1024 (length) counted 1024 frames 84 first 2.106 s last 10.402 s final 10.605 s span 122.831 fit 122.556 tok/s gap med 99.824 ms
+p16k-r6    HTTP 200 prompt 16068 out 1024 (length) counted 1024 frames 89 first 8.042 s last 16.84 s final 17.842 s span 116.166 fit 116.583 tok/s gap med 100.102 ms
+p535-r7    HTTP 200 prompt 58 out 1024 (length) counted 1024 frames 75 first 0.201 s last 7.607 s final 8.009 s span 136.77 fit 137.214 tok/s gap med 100.011 ms
+p1k-r7     HTTP 200 prompt 548 out 1024 (length) counted 1024 frames 76 first 0.206 s last 7.704 s final 8.011 s span 135.501 fit 136.287 tok/s gap med 100.018 ms
+p4k-r7     HTTP 200 prompt 3568 out 1024 (length) counted 1024 frames 80 first 0.703 s last 8.61 s final 8.912 s span 128.743 fit 128.941 tok/s gap med 100.004 ms
+p8k-r7     HTTP 200 prompt 7468 out 1024 (length) counted 1024 frames 84 first 2.106 s last 10.403 s final 10.607 s span 122.804 fit 122.549 tok/s gap med 99.984 ms
+p16k-r7    HTTP 200 prompt 16068 out 1024 (length) counted 1024 frames 89 first 8.032 s last 16.83 s final 17.839 s span 116.166 fit 116.611 tok/s gap med 99.877 ms
+
+p535 c=1: n=7 prompt [58] out [1024] decode span {'n': 7, 'median': 136.874, 'min': 136.73, 'max': 137.01} fit {'n': 7, 'median': 137.286, 'min': 137.214, 'max': 137.298} first {'n': 7, 'median': 0.202, 'min': 0.2, 'max': 0.208} tail {'n': 7, 'median': 0.402, 'min': 0.395, 'max': 0.417} gap {'n': 7, 'median': 100.011, 'min': 99.386, 'max': 100.167}
+p1k c=1: n=7 prompt [548] out [1024] decode span {'n': 7, 'median': 135.487, 'min': 135.468, 'max': 135.759} fit {'n': 7, 'median': 136.265, 'min': 136.255, 'max': 136.314} first {'n': 7, 'median': 0.208, 'min': 0.204, 'max': 0.209} tail {'n': 7, 'median': 0.305, 'min': 0.301, 'max': 0.311} gap {'n': 7, 'median': 100.041, 'min': 99.972, 'max': 100.122}
+p4k c=1: n=7 prompt [3568] out [1024] decode span {'n': 7, 'median': 128.98, 'min': 128.743, 'max': 128.996} fit {'n': 7, 'median': 128.96, 'min': 128.941, 'max': 129.004} first {'n': 7, 'median': 0.705, 'min': 0.699, 'max': 0.708} tail {'n': 7, 'median': 0.304, 'min': 0.302, 'max': 0.309} gap {'n': 7, 'median': 100.094, 'min': 99.932, 'max': 100.188}
+p8k c=1: n=7 prompt [7468] out [1024] decode span {'n': 7, 'median': 122.651, 'min': 121.304, 'max': 122.831} fit {'n': 7, 'median': 122.505, 'min': 122.301, 'max': 122.556} first {'n': 7, 'median': 2.098, 'min': 2.093, 'max': 2.108} tail {'n': 7, 'median': 0.201, 'min': 0.104, 'max': 0.213} gap {'n': 7, 'median': 99.984, 'min': 99.824, 'max': 100.144}
+p16k c=1: n=7 prompt [16068] out [1024] decode span {'n': 7, 'median': 116.166, 'min': 115.923, 'max': 116.702} fit {'n': 7, 'median': 116.581, 'min': 116.459, 'max': 116.611} first {'n': 7, 'median': 8.042, 'min': 8.025, 'max': 8.155} tail {'n': 7, 'median': 1.008, 'min': 1.0, 'max': 1.012} gap {'n': 7, 'median': 100.073, 'min': 99.877, 'max': 100.19}

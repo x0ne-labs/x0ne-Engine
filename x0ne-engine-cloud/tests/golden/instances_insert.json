@@ -1,0 +1,43 @@
+{
+  "name": "x0ne-engine-<SESSION>",
+  "machineType": "zones/us-central1-a/machineTypes/a3-highgpu-1g",
+  "confidentialInstanceConfig": {"confidentialInstanceType": "TDX"},
+  "scheduling": {
+    "provisioningModel": "SPOT",
+    "instanceTerminationAction": "DELETE",
+    "maxRunDuration": {"seconds": 1800},
+    "onHostMaintenance": "TERMINATE",
+    "automaticRestart": false
+  },
+  "guestAccelerators": [
+    {"acceleratorType": "zones/us-central1-a/acceleratorTypes/nvidia-h100-80gb", "acceleratorCount": 1}
+  ],
+  "disks": [
+    {
+      "boot": true,
+      "autoDelete": true,
+      "initializeParams": {
+        "sourceImage": "projects/x0ne-test-project/global/images/x0ne-cvm-0-2-1",
+        "diskName": "x0ne-engine-<SESSION>",
+        "labels": {"x0ne-engine": "session", "x0ne-session": "<SESSION>"}
+      }
+    }
+  ],
+  "networkInterfaces": [
+    {
+      "network": "global/networks/default",
+      "nicType": "GVNIC",
+      "accessConfigs": [{"type": "ONE_TO_ONE_NAT", "name": "External NAT"}]
+    }
+  ],
+  "shieldedInstanceConfig": {"enableSecureBoot": false, "enableVtpm": false, "enableIntegrityMonitoring": false},
+  "metadata": {
+    "items": [
+      {"key": "x0ne-config", "value": "<CONFIG>"},
+      {"key": "block-project-ssh-keys", "value": "true"}
+    ]
+  },
+  "labels": {"x0ne-engine": "session", "x0ne-session": "<SESSION>"},
+  "tags": {"items": ["x0ne-engine-<SESSION>"]},
+  "serviceAccounts": []
+}

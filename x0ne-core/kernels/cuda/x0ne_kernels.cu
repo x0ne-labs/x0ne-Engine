@@ -1,0 +1,10 @@
+// Single translation unit: one cubin per architecture holds every kernel.
+#include "probe.cu"
+#include "embedding.cu"
+#include "rmsnorm.cu"
+#include "rope.cu"
+#include "attention.cu"
+#include "swiglu.cu"
+#include "argmax.cu"
+#include "advance.cu"
+#include "moe.cu"

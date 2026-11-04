@@ -1,0 +1,10 @@
+{
+  "name": "x0ne-engine-<SESSION>",
+  "description": "x0ne-engine session <SESSION>: tcp:443 to this session's VM only",
+  "network": "global/networks/default",
+  "direction": "INGRESS",
+  "priority": 1000,
+  "sourceRanges": ["198.51.100.23/32"],
+  "targetTags": ["x0ne-engine-<SESSION>"],
+  "allowed": [{"IPProtocol": "tcp", "ports": ["443"]}]
+}

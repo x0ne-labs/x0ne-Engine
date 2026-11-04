@@ -1,0 +1,53 @@
+# Weekly update proposals, one grouped PR per ecosystem. Each PR goes through
+# the same required checks as any other. A release must be 7 days old before
+# it is proposed: a hijacked release is usually yanked within that window.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      # Patch and minor bumps land in one PR; majors stay separate for review.
+      cargo-minor-patch:
+        update-types: ["minor", "patch"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      # Actions are pinned by SHA; one PR a week bumps them all together.
+      github-actions:
+        patterns: ["*"]
+  - package-ecosystem: docker
+    # Dependabot reads a literal `FROM registry/image:tag@sha256:...` (ci/Containerfile.check,
+    # .diffoscope, .valgrind). An image named by an
+    # ARG (Containerfile, ci/Containerfile, ci/Containerfile.wasm) or in a workflow's env
+    # (release.yml, security.yml) is not read by it and stays pinned by hand.
+    directories:
+      - /
+      - /ci
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      # Base images are pinned by digest; one PR a week bumps them all together.
+      docker:
+        patterns: ["*"]

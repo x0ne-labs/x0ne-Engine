@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# The fake VM's curl: the loopback only; a download (rustup, a model) is refused.
+for a in "$@"; do
+  case $a in http://127.0.0.1:*) exec /usr/bin/curl "$@" ;; esac
+done
+echo "fake VM curl: no network but the loopback: $*" >&2
+exit 7

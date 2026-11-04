@@ -1,0 +1,26 @@
+# Citation metadata (https://citation-file-format.github.io/).
+# The author below is the copyright holder named in LICENSE.
+cff-version: 1.2.0
+message: "If you use this software in research, please cite it as below."
+type: software
+title: "x0ne-Engine"
+abstract: >-
+  Confidential-native inference server in Rust: it refuses to serve outside a
+  verified trusted execution environment (Intel TDX, NVIDIA confidential
+  GPUs), reads the model key only after attestation, and signs a receipt
+  per request that states the model digest, the enclave measurements and the
+  absence of prefix cache, shared KV cache and cross-client batching.
+authors:
+  - name: "x0ne"
+version: "0.2.0-beta.7"
+license:
+  - AGPL-3.0-only
+  - Apache-2.0
+repository-code: "https://github.com/x0ne-labs/x0ne-Engine"
+keywords:
+  - confidential-computing
+  - attestation
+  - intel-tdx
+  - nvidia-confidential-computing
+  - inference
+  - rust

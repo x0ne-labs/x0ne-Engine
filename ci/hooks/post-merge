@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# post-merge: run the local CI of the merged commit, then build and stage its
+# .deb (make ci && make deb), in the background as a transient user unit, in
+# the slice CI_SLICE when set (the environment, else a CI_SLICE= line of ci/ci.sh's
+# CI_ENV_FILE). Installed by `make install-hooks`. Branches covered:
+# git config x0ne.ci.branches (default "main"); git config
+# x0ne.ci.deb false skips the package. Verdicts: out/ci/<sha>.json,
+# $DEB_STAGING/<sha>/deb.json (nothing is published), the
+# journal (journalctl --user -u <unit>), CI_NOTIFY_CMD when set.
+# A red run leaves the unit failed (systemctl --user reset-failed clears it).
+set -u
+repo=$(git rev-parse --show-toplevel) || exit 0
+branch=$(git rev-parse --abbrev-ref HEAD)
+allowed=$(git config --get x0ne.ci.branches || echo "main")
+case " $allowed " in *" $branch "*) ;; *) exit 0 ;; esac
+sha=$(git rev-parse HEAD); short=${sha:0:7}
+range=""
+if orig=$(git rev-parse -q --verify ORIG_HEAD) && [ "$orig" != "$sha" ]; then range="$orig..$sha"; fi
+unit="engine-ci-$short-$(date +%s)"
+cmd="make ci"
+[ "$(git config --get x0ne.ci.deb || echo true)" = false ] || cmd="make ci && make deb"
+if ! command -v systemd-run >/dev/null; then echo "post-merge: no systemd-run, run 'make ci' yourself" >&2; exit 0; fi
+envf=${CI_ENV_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/x0ne-engine/ci.env}
+slice=${CI_SLICE:-$(sed -n 's/^CI_SLICE=//p' "$envf" 2>/dev/null | tail -n 1)}
+systemd-run --user --quiet --no-block --unit="$unit" ${slice:+"--slice=$slice"} \
+  --working-directory="$repo" --setenv=PATH="$PATH" --setenv=CI_RANGE="$range" --setenv=CI_UNIT="$unit" \
+  ${CI_CACHE:+"--setenv=CI_CACHE=$CI_CACHE"} \
+  bash -c "$cmd" \
+  || { echo "post-merge: systemd-run failed, run 'make ci' yourself" >&2; exit 0; }
+echo "post-merge: $cmd for $short started as $unit; follow with: journalctl --user -u $unit -f; verdicts in out/ci/$short*.json and out/deb/latest.json"

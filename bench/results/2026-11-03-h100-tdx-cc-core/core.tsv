@@ -1,0 +1,8 @@
+c1-start	23:32:01	rc=0	4s	-	gpu0=32, 345 MHz, 2619 MHz, 70.74 W, 145 MiB, 0x0000000000000001	gpu1=34, 1980 MHz, 2619 MHz, 169.94 W, 139 MiB, 0x0000000000000000
+c2-graph	23:33:20	rc=0	75s	-	gpu0=33, 345 MHz, 2619 MHz, 70.81 W, 139 MiB, 0x0000000000000001	gpu1=45, 1980 MHz, 2619 MHz, 292.94 W, 133 MiB, 0x0000000000000000
+c3-api	23:35:36	rc=0	133s	test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 132.24s 	gpu0=40, 345 MHz, 2619 MHz, 72.81 W, 133 MiB, 0x0000000000000001	gpu1=38, 1980 MHz, 2619 MHz, 235.02 W, 127 MiB, 0x0000000000000000
+c4-graph	23:36:24	rc=0	45s	test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 44.80s 	gpu0=35, 345 MHz, 2619 MHz, 71.44 W, 127 MiB, 0x0000000000000001	gpu1=40, 1980 MHz, 2619 MHz, 295.67 W, 121 MiB, 0x0000000000000000
+c4-fresh	23:36:40	rc=0	16s	test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.53s 	gpu0=40, 1980 MHz, 2619 MHz, 271.32 W, 121 MiB, 0x0000000000000000	gpu1=39, 1980 MHz, 2619 MHz, 249.10 W, 109 MiB, 0x0000000000000000
+c2-eager	23:37:03	rc=0	20s	-	gpu0=36, 345 MHz, 2619 MHz, 71.60 W, 109 MiB, 0x0000000000000001	gpu1=40, 1980 MHz, 2619 MHz, 253.02 W, 103 MiB, 0x0000000000000000
+c5-model	23:37:58	rc=0	51s	test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 50.58s 	gpu0=37, 345 MHz, 2619 MHz, 71.77 W, 103 MiB, 0x0000000000000001	gpu1=41, 1980 MHz, 2619 MHz, 268.73 W, 97 MiB, 0x0000000000000000
+c6-long	23:40:30	rc=0	149s	test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 147.90s 	gpu0=37, 345 MHz, 2619 MHz, 71.86 W, 97 MiB, 0x0000000000000001	gpu1=42, 1980 MHz, 2619 MHz, 188.92 W, 91 MiB, 0x0000000000000000

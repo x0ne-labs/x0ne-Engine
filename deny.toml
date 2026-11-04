@@ -1,0 +1,73 @@
+# cargo-deny policy (CI job `deny`). Locally: cargo deny --locked --workspace check
+#
+# An advisory ignored here is explained in SECURITY.md and also ignored in
+# .cargo/audit.toml, unless its reason says cargo audit keeps it (a warning
+# there); `x0ne-infer::security_doc` fails if the three drift apart.
+
+[graph]
+# Resolves every optional dependency (nvml, cuda, …) without building them,
+# so the license and advisory checks cover what a feature can pull in.
+all-features = true
+
+[advisories]
+yanked = "deny"
+ignore = [
+  # rsa 0.9.x, Marvin timing side channel: private-key operations only.
+  # This crate only verifies NRAS signatures under a public key (nras.rs).
+  { id = "RUSTSEC-2023-0071", reason = "rsa is used for public-key verification only; see SECURITY.md" },
+  # paste, unmaintained proc-macro pulled by gemm through candle. Since
+  # 2026-11-04 candle is the CPU reference of the tests (feature
+  # `candle-reference`): the served build has neither (tests/served_build.rs).
+  { id = "RUSTSEC-2024-0436", reason = "transitive via candle/gemm; not ignored by cargo audit, which only warns; see SECURITY.md" },
+  # zip 8.6.0, pulled by candle-core 0.11.0 only, a test reference (zip ^8.6; fixed in 9.0.0 per
+  # RustSec, 9.0.1 per GHSA-4684-h2q9-2vcp). All four are in ZipArchive::extract,
+  # ZipArchive::extract_unwrapped_root_dir and ZipStreamReader::extract, which
+  # nothing in the graph calls (a call to any of them makes these live). The test
+  # security_doc::the_zip_ignores_hold_only_while_nothing_opens_an_archive fails
+  # if a workspace source names zip or candle's npz/pth loaders. Re-examine by
+  # 2026-11-17.
+  { id = "RUSTSEC-2026-0367", reason = "zip extract() never called, via candle-core; see SECURITY.md; re-examine by 2026-11-17" },
+  { id = "RUSTSEC-2026-0368", reason = "zip extract() never called, via candle-core; see SECURITY.md; re-examine by 2026-11-17" },
+  { id = "RUSTSEC-2026-0369", reason = "zip extract() never called, via candle-core; see SECURITY.md; re-examine by 2026-11-17" },
+  { id = "RUSTSEC-2026-0429", reason = "zip extract() never called, via candle-core; see SECURITY.md; re-examine by 2026-11-17" },
+]
+
+[licenses]
+# Every license here is permissive; Apache-2.0 §4(d) attribution is met by
+# NOTICE and THIRD_PARTY_LICENSES. Adding a copyleft license is a decision.
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "MIT",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+  "BSL-1.0",
+  "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.8
+# x0ne's server crates are AGPL-3.0-only (LICENSING.md, 2026-11-02). Excepted
+# by name: the list above stays the one every other crate is held to, and
+# x0ne-sdk, x0ne-confidential and x0ne-ohttp stay held to it (Apache-2.0).
+exceptions = [
+  { allow = ["AGPL-3.0-only"], crate = "x0ne-infer" },
+  { allow = ["AGPL-3.0-only"], crate = "x0ne-engine-cloud" },
+  # x0ne Core's crates, linked by x0ne-infer's `cuda` feature (x0ne-core/).
+  { allow = ["AGPL-3.0-only"], crate = "x0ne-core-kernels" },
+  { allow = ["AGPL-3.0-only"], crate = "x0ne-core-runtime" },
+]
+
+[bans]
+# Duplicates are a size and audit cost, not a fault; 24 measured 2026-10-05.
+multiple-versions = "warn"
+wildcards = "deny"
+# Path dependencies between the two workspace crates carry no version.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

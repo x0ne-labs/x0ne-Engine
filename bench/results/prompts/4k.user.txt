@@ -1,0 +1,184 @@
+Here is a list of records.
+
+Record 00000: the code of the purple vault is 8606.
+Record 00001: the code of the yellow vault is 5775.
+Record 00002: the code of the white office is 8924.
+Record 00003: the code of the purple garage is 9573.
+Record 00004: the code of the white storage room is 5178.
+Record 00005: the code of the green office is 9459.
+Record 00006: the code of the yellow office is 5192.
+Record 00007: the code of the orange garage is 6793.
+Record 00008: the code of the yellow garage is 2310.
+Record 00009: the code of the black office is 4167.
+Record 00010: the code of the white vault is 3244.
+Record 00011: the code of the yellow cabinet is 6197.
+Record 00012: the code of the green archive is 7082.
+Record 00013: the code of the purple storage room is 4571.
+Record 00014: the code of the blue cabinet is 9928.
+Record 00015: the code of the blue warehouse is 9585.
+Record 00016: the code of the black locker is 6846.
+Record 00017: the code of the purple vault is 1527.
+Record 00018: the code of the red office is 1780.
+Record 00019: the code of the yellow warehouse is 4941.
+Record 00020: the code of the white storage room is 4562.
+Record 00021: the code of the red locker is 3075.
+Record 00022: the code of the purple storage room is 9304.
+Record 00023: the code of the white warehouse is 9953.
+Record 00024: the code of the green office is 6710.
+Record 00025: the code of the red vault is 3807.
+Record 00026: the code of the purple vault is 2756.
+Record 00027: the code of the purple vault is 7645.
+Record 00028: the code of the red office is 5354.
+Record 00029: the code of the green garage is 5075.
+Record 00030: the code of the purple cabinet is 3000.
+Record 00031: the code of the yellow archive is 2753.
+Record 00032: the code of the black warehouse is 9734.
+Record 00033: the code of the blue cabinet is 6783.
+Record 00034: the code of the red garage is 8756.
+Record 00035: the code of the black garage is 1789.
+Record 00036: the code of the yellow storage room is 4314.
+Record 00037: the code of the green storage room is 1107.
+Record 00038: the code of the blue archive is 4456.
+Record 00039: the code of the red storage room is 1929.
+Record 00040: the code of the red warehouse is 1422.
+Record 00041: the code of the blue locker is 8551.
+Record 00042: the code of the orange locker is 2676.
+Record 00043: the code of the red archive is 6109.
+Record 00044: the code of the green locker is 4002.
+Record 00045: the code of the green warehouse is 4019.
+Record 00046: the code of the yellow cabinet is 4712.
+Record 00047: the code of the red warehouse is 7041.
+Record 00048: the code of the red office is 7430.
+Record 00049: the code of the red office is 7327.
+Record 00050: the code of the white vault is 8508.
+Record 00051: the code of the white locker is 6757.
+Record 00052: the code of the yellow locker is 6282.
+Record 00053: the code of the red locker is 4227.
+Record 00054: the code of the red storage room is 4672.
+Record 00055: the code of the yellow archive is 1705.
+Record 00056: the code of the black archive is 5286.
+Record 00057: the code of the purple garage is 3623.
+Record 00058: the code of the yellow archive is 4028.
+Record 00059: the code of the purple storage room is 6357.
+Record 00060: the code of the yellow vault is 8290.
+Record 00061: the code of the purple locker is 9275.
+Record 00062: the code of the white office is 3032.
+Record 00063: the code of the orange office is 5097.
+Record 00064: the code of the blue cabinet is 8310.
+Record 00065: the code of the black vault is 3079.
+Record 00066: the code of the white warehouse is 8316.
+Record 00067: the code of the red garage is 1197.
+Record 00068: the code of the black locker is 2770.
+Record 00069: the code of the green vault is 3587.
+Record 00070: the code of the black vault is 1280.
+Record 00071: the code of the black cabinet is 6057.
+Record 00072: the code of the green garage is 9366.
+Record 00073: the code of the yellow archive is 6191.
+Record 00074: the code of the orange archive is 7940.
+Record 00075: the code of the blue storage room is 8317.
+Record 00076: the code of the blue cabinet is 2890.
+Record 00077: the code of the purple garage is 8411.
+Record 00078: the code of the orange office is 1416.
+Record 00079: the code of the yellow vault is 7457.
+Record 00080: the code of the orange vault is 3630.
+Record 00081: the code of the green office is 7175.
+Record 00082: the code of the blue locker is 9804.
+Record 00083: the code of the blue archive is 9605.
+Record 00084: the code of the green locker is 1554.
+Record 00085: the code of the red storage room is 6363.
+Record 00086: the code of the black warehouse is 9632.
+Record 00087: the code of the green archive is 9801.
+Record 00088: the code of the white storage room is 5670.
+Record 00089: the code of the white vault is 9375.
+Record 00090: the code of the yellow vault is 4124.
+Record 00091: the code of the yellow vault is 9861.
+Record 00092: the code of the yellow storage room is 3362.
+Record 00093: the code of the green garage is 7995.
+Record 00094: the code of the black archive is 8880.
+Record 00095: the code of the white office is 2385.
+Record 00096: the code of the purple vault is 8950.
+Record 00097: the code of the orange warehouse is 1623.
+Record 00098: the code of the blue locker is 8012.
+Record 00099: the code of the orange garage is 1277.
+Record 00100: the code of the purple vault is 4306.
+Record 00101: the code of the green locker is 6243.
+Record 00102: the code of the purple archive is 5176.
+Record 00103: the code of the purple archive is 3281.
+Record 00104: the code of the black warehouse is 2110.
+Record 00105: the code of the orange cabinet is 9383.
+Record 00106: the code of the orange cabinet is 1188.
+Record 00107: the code of the green archive is 2701.
+Record 00108: the code of the blue vault is 2818.
+Record 00109: the code of the green garage is 5675.
+Record 00110: the code of the white garage is 2016.
+Record 00111: the code of the purple office is 7881.
+Record 00112: the code of the black office is 4446.
+Record 00113: the code of the white cabinet is 6791.
+Record 00114: the code of the orange cabinet is 6356.
+Record 00115: the code of the purple storage room is 7445.
+Record 00116: the code of the purple office is 4610.
+Record 00117: the code of the red garage is 3675.
+Record 00118: the code of the orange garage is 1416.
+Record 00119: the code of the orange garage is 1617.
+Record 00120: the code of the purple warehouse is 1982.
+Record 00121: the code of the green garage is 9351.
+Record 00122: the code of the red archive is 4004.
+Record 00123: the code of the red cabinet is 1637.
+Record 00124: the code of the purple vault is 6994.
+Record 00125: the code of the purple warehouse is 8835.
+Record 00126: the code of the blue archive is 7712.
+Record 00127: the code of the black archive is 4057.
+Record 00128: the code of the black cabinet is 9686.
+Record 00129: the code of the yellow archive is 1599.
+Record 00130: the code of the orange cabinet is 5108.
+Record 00131: the code of the green garage is 9173.
+Record 00132: the code of the green warehouse is 6626.
+Record 00133: the code of the green warehouse is 1763.
+Record 00134: the code of the red office is 5040.
+Record 00135: the code of the red warehouse is 3545.
+Record 00136: the code of the white cabinet is 4630.
+Record 00137: the code of the black warehouse is 7295.
+Record 00138: the code of the purple storage room is 3780.
+Record 00139: the code of the black garage is 9749.
+Record 00140: the code of the red vault is 4210.
+Record 00141: the code of the orange garage is 7731.
+Record 00142: the code of the green garage is 8520.
+Record 00143: the code of the orange vault is 3145.
+Record 00144: the code of the red warehouse is 3294.
+Record 00145: the code of the purple storage room is 4119.
+Record 00146: the code of the blue cabinet is 1004.
+Record 00147: the code of the green vault is 7901.
+Record 00148: the code of the blue storage room is 4570.
+Record 00149: the code of the red garage is 3755.
+Record 00150: the code of the yellow vault is 1232.
+Record 00151: the code of the red warehouse is 2665.
+Record 00152: the code of the yellow garage is 9814.
+Record 00153: the code of the red office is 6303.
+Record 00154: the code of the red cabinet is 3076.
+Record 00155: the code of the blue cabinet is 6885.
+Record 00156: the code of the purple office is 7850.
+Record 00157: the code of the blue warehouse is 4739.
+Record 00158: the code of the yellow vault is 7376.
+Record 00159: the code of the green storage room is 8337.
+Record 00160: the code of the blue warehouse is 5670.
+Record 00161: the code of the blue archive is 6063.
+Record 00162: the code of the green storage room is 5372.
+Record 00163: the code of the yellow garage is 3341.
+Record 00164: the code of the orange office is 6674.
+Record 00165: the code of the green warehouse is 8939.
+Record 00166: the code of the green locker is 6744.
+Record 00167: the code of the black locker is 9281.
+Record 00168: the code of the purple locker is 6726.
+Record 00169: the code of the blue archive is 3023.
+Record 00170: the code of the purple cabinet is 5876.
+Record 00171: the code of the white office is 9613.
+Record 00172: the code of the yellow cabinet is 5674.
+Record 00173: the code of the blue garage is 6547.
+Record 00174: the code of the blue office is 7616.
+Record 00175: the code of the white storage room is 2273.
+Record 00176: the code of the purple archive is 8710.
+Record 00177: the code of the red garage is 4679.
+Record 00178: the code of the purple locker is 2444.
+Record 00179: the code of the yellow vault is 5261.
+
+Explain how a CPU cache works.

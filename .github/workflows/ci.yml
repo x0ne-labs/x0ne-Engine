@@ -1,0 +1,289 @@
+name: CI
+
+# Quality gates. Every job name below is a required status check of the
+# `main` ruleset: renaming or adding a job means updating the ruleset in the same PR.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# No token permission unless a job asks for it.
+permissions: {}
+
+# A new push to a PR cancels the run it supersedes; runs on main always finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # Same compiler as rust-toolchain.toml, the Containerfile and the MSRV;
+  # tests/toolchain_pins.rs fails if they drift apart.
+  RUST_TOOLCHAIN: 1.98.1
+  # Every feature except `cuda`, whose build script needs nvcc (no hosted
+  # runner has it). `cuda` is compiled by the `image` job instead.
+  ALL_FEATURES: x0ne-infer/nvml,x0ne-infer/probe
+
+jobs:
+  fmt:
+    name: fmt
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rustfmt --no-self-update
+      # The workspace's members; x0ne-core/ is formatted in x0ne Core (x0ne-core/PROVENANCE.md).
+      - run: cargo fmt -- --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      # All of clippy::pedantic, minus the lints that had hits on 2026-10-05
+      # (the debt: drop an -A once its lint is fixed). A lint new in a later
+      # clippy is enforced by default. make ci reads this block through
+      # ci/clippy-pedantic.sh: keep it one `>-` list of -W/-A clippy pairs.
+      PEDANTIC: >-
+        -W clippy::pedantic
+        -A clippy::must_use_candidate
+        -A clippy::missing_errors_doc
+        -A clippy::doc_markdown
+        -A clippy::cast_possible_truncation
+        -A clippy::format_collect
+        -A clippy::cast_precision_loss
+        -A clippy::redundant_closure_for_method_calls
+        -A clippy::items_after_statements
+        -A clippy::cast_lossless
+        -A clippy::map_unwrap_or
+        -A clippy::format_push_string
+        -A clippy::float_cmp
+        -A clippy::too_many_lines
+        -A clippy::needless_pass_by_value
+        -A clippy::many_single_char_names
+        -A clippy::borrow_as_ptr
+        -A clippy::unreadable_literal
+        -A clippy::semicolon_if_nothing_returned
+        -A clippy::missing_panics_doc
+        -A clippy::ignored_unit_patterns
+        -A clippy::match_wildcard_for_single_variants
+        -A clippy::needless_raw_string_hashes
+        -A clippy::cast_sign_loss
+        -A clippy::struct_field_names
+        -A clippy::cast_possible_wrap
+        -A clippy::manual_let_else
+        -A clippy::struct_excessive_bools
+        -A clippy::range_plus_one
+        -A clippy::uninlined_format_args
+        -A clippy::single_match_else
+        -A clippy::if_not_else
+        -A clippy::wildcard_imports
+        -A clippy::similar_names
+        -A clippy::unused_self
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component clippy --no-self-update
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # Default features, then every feature but `cuda`: cfg-gated code is
+      # linted on both sides.
+      - name: clippy (default features)
+        run: |
+          read -ra pedantic <<< "$PEDANTIC"
+          cargo clippy --locked --workspace --all-targets -- -D warnings "${pedantic[@]}"
+      - name: clippy (all features but cuda)
+        run: |
+          read -ra pedantic <<< "$PEDANTIC"
+          cargo clippy --locked --workspace --all-targets --features "$ALL_FEATURES" -- -D warnings "${pedantic[@]}"
+
+  test:
+    name: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      # Full debug info outgrows the ~14 GB a runner starts with; line tables
+      # keep the file:line of a panic (target sizes: docs/ci-local.md).
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      - run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --no-self-update
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # `--all-targets` skips doctests: first step.
+      - name: test (doctests and default features)
+        run: cargo test --locked --workspace
+      - name: test (all targets)
+        run: cargo test --locked --workspace --all-targets
+      - name: test (nvml)
+        run: cargo test --locked --workspace --all-targets --features x0ne-infer/nvml
+      # The client build of docs/cloud.md (ci/inside.sh, step build-cloud).
+      - name: build (cloud client, release)
+        run: |
+          cargo build --locked --release -p x0ne-infer --bin x0ne-engine --bin x0ne-engine-proxy -p x0ne-engine-cloud --bin x0ne-engine-cloud
+          target/release/x0ne-engine cloud --help >/dev/null
+
+  doc:
+    name: doc
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --no-self-update
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # A link to a cfg-gated item breaks in the other feature set.
+      - run: cargo doc --locked --workspace --no-deps
+      - run: cargo doc --locked --workspace --no-deps --features "$ALL_FEATURES"
+
+  msrv:
+    name: msrv
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      # Full debug info outgrows the ~14 GB a runner starts with; line tables
+      # keep the file:line of a panic (target sizes: docs/ci-local.md).
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      # `rust-version = "1.98"` means 1.98.0; rustup would resolve "1.98" to
+      # the newest 1.98.x, so the patch level is made explicit.
+      - name: Install the declared MSRV
+        run: |
+          msrv=$(sed -n 's/^rust-version *= *"\([0-9.]*\)".*/\1/p' Cargo.toml | head -n 1)
+          if [ -z "$msrv" ]; then echo "::error::no rust-version in the workspace Cargo.toml"; exit 1; fi
+          case "$msrv" in *.*.*) ;; *) msrv="$msrv.0" ;; esac
+          rustup toolchain install "$msrv" --profile minimal --no-self-update
+          echo "RUSTUP_TOOLCHAIN=$msrv" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo build --locked --workspace --all-targets --features "$ALL_FEATURES"
+
+  stable:
+    name: stable
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      # Full debug info outgrows the ~14 GB a runner starts with; line tables
+      # keep the file:line of a panic (target sizes: docs/ci-local.md).
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      # Overrides rust-toolchain.toml: catches a break from the next compiler early.
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      - run: rustup toolchain install stable --profile minimal --no-self-update
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo build --locked --workspace --all-targets --features "$ALL_FEATURES"
+
+  image:
+    name: image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The CUDA devel base image unpacks to ~9 GB; the runner starts with ~14 GB free.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      # The only job that compiles the `cuda` feature (nvcc is in the image): the
+      # attested server through x0ne Core. Built, not run: no GPU on hosted runners.
+      - name: Build
+        run: |
+          podman build --target confidential -t x0ne-infer:ci .
+          podman image ls x0ne-infer
+
+  # The shell tests of the local CI (ci/tests), the ones `make ci` runs in its
+  # image. They fake podman, df, pgrep, jq and logger: bash, coreutils, git
+  # and jq are all they need on the runner. strip-release.sh and deb-verify.sh
+  # also need cc, binutils, perl and dpkg-deb, and skip without them here
+  # (X0NE_REQUIRE_CI_TOOLS is set in the CI image only).
+  ci-scripts:
+    name: ci-scripts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      # release-verify-tag.sh skips without jq; here the skip is a failure.
+      X0NE_REQUIRE_JQ: 1
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # jq ships with the ubuntu-24.04 runner image; a runner without it fails here, by name.
+      - name: jq is installed
+        run: |
+          if ! command -v jq >/dev/null; then echo "::error::jq not found on the runner (ci/tests/release-verify-tag.sh needs it)"; exit 1; fi
+          jq --version
+      - name: ci.sh tests
+        run: bash ci/tests/ci-sh.sh
+      - name: release tag verification step
+        run: bash ci/tests/release-verify-tag.sh
+      - name: feature list (FEATURES.toml, FEATURES.md)
+        env:
+          X0NE_REQUIRE_CI_TOOLS: 1
+        run: python3 -I ci/features.py --check && bash ci/tests/features.sh

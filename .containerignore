@@ -1,0 +1,7 @@
+# Build context: sources and lock only. target/ alone is gigabytes.
+target/
+**/target/
+.git/
+.github/
+*.sealed
+**/*.rs.bk

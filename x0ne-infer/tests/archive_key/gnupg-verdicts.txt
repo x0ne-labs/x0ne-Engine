@@ -1,0 +1,6 @@
+test-archive-keyring + reference.json.sig: GOODSIG VALIDSIG 
+rogue-keyring + reference.json.sig: ERRSIG NO_PUBKEY 
+expired-subkey-keyring + reference.json.expired.sig: EXPKEYSIG KEYEXPIRED VALIDSIG 
+revoked-subkey-keyring + reference.json.sig: KEYREVOKED REVKEYSIG VALIDSIG 
+revoked-subkey-keyring + reference.json.rotated.sig: GOODSIG VALIDSIG 
+primary-only-keyring + reference.json.primary-only.sig: GOODSIG VALIDSIG 

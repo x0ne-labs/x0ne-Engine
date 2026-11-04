@@ -1,0 +1,17 @@
+{
+  "algorithm": "sha384",
+  "format": 1,
+  "image": {
+    "name": "x0ne-cvm 0.2.4 (tar 03d53a41, run 2026-10-25)"
+  },
+  "provenance": {
+    "reference_signed_by": "test-archive-key",
+    "release": false
+  },
+  "registers": {
+    "rtmr1": "2d014fbe15553bf766f99356309993839d5755e199df8cc2df72cd2bdc017efec1c1efe5a995443cdf1ba38e598b3777",
+    "rtmr2": "37c3c7c5394df5c361681745bf7b68ee3b88922cd82c0986358676fc3c6e789900aac9db28ad6dd77f05defd00b7b559"
+  },
+  "signature": null,
+  "version": "0.2.0-beta.7"
+}

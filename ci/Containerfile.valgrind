@@ -1,0 +1,7 @@
+# valgrind for scripts/obtok-trace.sh: lackey logs every instruction fetch and
+# data access of the oblivious tokenizer. Base by digest (the trixie-slim of
+# Containerfile.diffoscope); apt packages not snapshot pinned.
+FROM docker.io/library/debian:trixie-slim@sha256:918311b7b6c4c6f68b232ba516584925f6c78ad82b6fd534b98979df6438e483
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends valgrind \
+ && rm -rf /var/lib/apt/lists/*

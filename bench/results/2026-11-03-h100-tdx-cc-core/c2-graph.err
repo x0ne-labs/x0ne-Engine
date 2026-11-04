@@ -1,0 +1,16 @@
+loaded in 3.6 s: NVIDIA H100 80GB HBM3 (cc 9.0, 132 SMs, cubin sm_90a), driver 13020, cuBLAS 130400, arena 19210968096 bytes, decode graph 439 nodes, decode attention split-K P 49 (grid 8 x 49, 4 q heads per block, 3 blocks per SM, merge Kernel), feed-forward dense, decode Graph
+s20 e3 run 0: first token 0.008 s, decode 138.60 tok/s
+s20 e3 run 1: first token 0.008 s, decode 138.62 tok/s
+s20 e3 run 2: first token 0.008 s, decode 138.63 tok/s
+s31 e3 run 0: first token 0.008 s, decode 138.57 tok/s
+s31 e3 run 1: first token 0.008 s, decode 138.55 tok/s
+s31 e3 run 2: first token 0.008 s, decode 138.56 tok/s
+4k e3 run 0: first token 0.514 s, decode 129.30 tok/s
+4k e3 run 1: first token 0.505 s, decode 129.30 tok/s
+4k e3 run 2: first token 0.513 s, decode 129.30 tok/s
+8k e3 run 0: first token 1.954 s, decode 122.22 tok/s
+8k e3 run 1: first token 1.951 s, decode 122.26 tok/s
+8k e3 run 2: first token 1.955 s, decode 122.22 tok/s
+16k e3 run 0: first token 7.716 s, decode 116.43 tok/s
+16k e3 run 1: first token 7.718 s, decode 116.45 tok/s
+16k e3 run 2: first token 7.712 s, decode 116.43 tok/s

@@ -1,0 +1,50 @@
+{
+  "image": {
+    "disk_tar_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "gcp_image": "x0ne-cvm-0-1-0",
+    "name": "x0ne-cvm",
+    "source": {
+      "x0ne_os": "test"
+    },
+    "version": "0.1.0"
+  },
+  "mrtd": {
+    "policy": "gce-launch-endorsement",
+    "ram_gib": {
+      "a3-highgpu-1g": 0
+    },
+    "root_spki_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "provider": "gcp",
+  "rtmr0": {
+    "events_sha384": {
+      "a3-highgpu-1g": [
+        "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0",
+        "firmware:cfv",
+        "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2"
+      ]
+    },
+    "policy": "gce-endorsed"
+  },
+  "rtmr1": {
+    "boot_applications_sha384": [
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "gpt_event_sha384": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+    "policy": "eventlog"
+  },
+  "rtmr2": {
+    "events_sha384": {
+      ".linux": "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
+    },
+    "policy": "eventlog"
+  },
+  "rtmr3": {
+    "policy": "zero"
+  },
+  "schema": "x0ne-engine/reference/v2",
+  "td_attributes": {
+    "debug": false
+  },
+  "tee": "intel-tdx"
+}

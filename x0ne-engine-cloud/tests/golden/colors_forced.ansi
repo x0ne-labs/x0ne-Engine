@@ -1,0 +1,207 @@
+$ x0ne-engine cloud quote
+[stdout]
+[1mQuote (Cloud Billing catalog, # UTC; estimate, billed by Google to your project)[0m
+  a3-highgpu-1g spot, 1x H100 80GB, Intel TDX   [33m  6.06 USD/h[0m
+  Confidential Computing on A3, spot            [33m  0.44 USD/h[0m
+    [2m(Google's pricing page, read 2026-10-16: https://cloud.google.com/confidential-computing/confidential-vm/pricing)[0m
+  external IP, boot disk                        [33m  0.01 USD/h[0m
+  [33mthe VM deletes itself at # UTC (60 min)[0m
+  [1;33mmaximum cost if it runs to the end              6.52 USD[0m
+  [33mSpot: Google may stop it at any time; you pay only the time used.[0m
+[stderr]
+x0ne Engine cloud: Google Cloud, project x0ne-test-project
+Token OK: tester@example.com, expires in 59 min.
+Preflight: H100 spot quota in us-central1: 1 (used 0). No x0ne-engine VM running. Image x0ne-cvm-0-2-1 found.
+[exit 0]
+
+$ x0ne-engine cloud up --yes --max-cost 10
+[stderr]
+x0ne Engine cloud: Google Cloud, project x0ne-test-project
+Token OK: tester@example.com, expires in 59 min.
+[33m--max-run cut to 54 min (asked: 60 min): the token expires at # UTC and up cannot renew it, so the session ends by # UTC, 5 min before, to delete the VM with it.[0m
+Preflight: H100 spot quota in us-central1: 1 (used 0). No x0ne-engine VM running. Image x0ne-cvm-0-2-1 found.
+Firewall: tcp:443 from 198.51.100.23/32 only, this machine's public address as Google's name server sees it (--allow-from <CIDR> to widen).
+
+[1mQuote (Cloud Billing catalog, # UTC; estimate, billed by Google to your project)[0m
+  a3-highgpu-1g spot, 1x H100 80GB, Intel TDX   [33m  6.06 USD/h[0m
+  Confidential Computing on A3, spot            [33m  0.44 USD/h[0m
+    [2m(Google's pricing page, read 2026-10-16: https://cloud.google.com/confidential-computing/confidential-vm/pricing)[0m
+  external IP, boot disk                        [33m  0.01 USD/h[0m
+  [33mthe VM deletes itself at # UTC (54 min)[0m
+  [1;33mmaximum cost if it runs to the end              5.97 USD[0m
+  [33mSpot: Google may stop it at any time; you pay only the time used.[0m
+
+[1m[1/5] Creating x0ne-engine-<SESSION> in us-central1-a[0m ... done (#)
+[1m[2/5] Waiting for boot and GPU setup[0m ... done (#)
+[1m[3/5] Checking the hardware proof on THIS machine. No question and no session key have been sent yet.[0m
+      checking the TDX quote (fake)
+      [1mCPU[0m   Intel TDX quote [32mgenuine[0m, TCB [32mUpToDate[0m / QE [32mUpToDate[0m, TDX module identity [32mmatched[0m (Intel PCS, fetched now)
+      [1mFirm[0m  Google-[32mendorsed[0m firmware (MRTD 0f0f0f0f..., svn 2, signed fake signer)
+      [1mImage[0m x0ne-cvm 0.1.0: RTMR1, RTMR2 [32mmatch[0m the reference; RTMR3 empty; [33mRTMR0 not among the known values (reported)[0m
+      [1mGPU[0m   1 GPU(s), confidential computing [32mon[0m (NRAS token, nonce [32mbound[0m to this session)
+      [1mLink[0m  TLS key and your session config are [32mbound[0m to this quote
+      [1mModel[0m qwen3:0.6b, digest dddddddd... [32mmatches[0m the catalog
+      [1;32mVERIFIED[0m. Limits: x0ne-engine cloud status --limits
+[1m[4/5] Releasing the session key to the verified VM ...[0m
+      model loaded (fake)
+[1m[5/5] OpenAI API on http://127.0.0.1:8478/v1[0m  (key: <DIR>/run/x0ne-engine/local.key)
+      Context: 40960 tokens, prompt and answer together.
+      [33m# min left: the session ends 5 min before the token expires (# UTC).[0m Ctrl-C stops the session and deletes the VM.
+Deleting x0ne-engine-<SESSION> ... done. [33mEstimated cost: # USD.[0m
+Session stopped by x0ne-engine cloud down.
+[exit 0]
+
+$ x0ne-engine cloud status   # while up serves
+[stdout]
+[1mx0ne Engine cloud session <SESSION>[0m: serving (up process # alive)
+  provider  gcp, project x0ne-test-project, zone us-central1-a
+  VM        x0ne-engine-<SESSION> (a3-highgpu-1g spot, Intel TDX + 1x H100)
+  model     qwen3:0.6b
+  local API http://127.0.0.1:8478/v1 (key: <DIR>/run/x0ne-engine/local.key)
+  verdict   [1;32mVERIFIED[0m (by the relay, on this machine)
+  expires   [33m# UTC (# min left)[0m; the VM deletes itself then
+  cost      [33m# USD so far (estimate, 6.51 USD/h); at most 5.97 USD[0m
+  note      --max-run cut to 54 min: the token expires at # UTC
+[exit 0]
+
+$ x0ne-engine cloud down
+[stderr]
+x0ne-engine cloud: the session is stopping; its VM is being deleted ...
+x0ne-engine cloud: session ended; VM deleted
+[exit 0]
+
+$ x0ne-engine cloud status --limits
+[stdout]
+[1mx0ne Engine cloud session <SESSION>[0m: deleted (ended)
+  provider  gcp, project x0ne-test-project, zone us-central1-a
+  VM        x0ne-engine-<SESSION> (a3-highgpu-1g spot, Intel TDX + 1x H100)
+  model     qwen3:0.6b
+  verdict   [1;32mVERIFIED[0m (by the relay, on this machine)
+  cost      [33m# USD so far (estimate, 6.51 USD/h); at most 5.97 USD[0m
+  note      estimated cost # USD
+
+[1mNot protected:[0m
+- this machine: malware in your session can read the local key and your questions;
+- Google's firmware: the binary Google signed is fetched and measured, its source is not published; RTMR0 (the host's TD HOB, Secure Boot variables, ACPI tables and boot variables) is pinned to the reference's events as one boot showed them, not audited;
+- revocation: the TD's PCK is checked against Intel's PCK CRL, its PCK CA and Intel's TCB signing certificate against Intel's root CA CRL, both fetched live; the OCSP responses a document staples about NVIDIA's signing chain are judged under the policy the verdict names, a verified revoked refused either way; no TD staples them yet;
+- the platform's patch level: under the default transparent TCB policy the host is accepted on Intel's standard TCB collateral, and what Intel's latest collateral rates not fixed is named on the VERIFIED line and in each receipt, not refused; `--tcb-policy strict` refuses it;
+- the GPU verdict comes from NVIDIA's NRAS service; each connection's GPU evidence answers a nonce derived from that connection's TLS exporter and TDX quote, but CPU and GPU are bound by the TD's software, not by the hardware (Hopper): the link falls with the CPU TEE (TEE.fail);
+- physical attacks on memory (TEE.fail, DDR5 interposer, 2025-10) and side channels;
+- a compromise of Intel's, NVIDIA's or Google's roots;
+- availability: Google can stop the VM (spot); it sees times, sizes, IP addresses and the bill;
+- the image reference: the relay takes one only with a signature by the x0ne archive key pinned in its build, and a relay built before the signing ceremony pins none and refuses them all; whoever holds the signing subkey can sign any image, and a revocation reaches you only with a new release;
+- the behaviour of the model itself.
+
+[1mReported by the relay for this session:[0m
+- fake relay: nothing was verified
+[exit 0]
+
+$ x0ne-engine cloud sweep --yes
+[stdout]
+[1mx0ne-engine resources in project x0ne-test-project:[0m
+  VM            x0ne-engine-f00d42                  us-central1-a   RUNNING
+  IP address    x0ne-engine-ip1                     us-central1     RESERVED
+  [33mA RUNNING VM may be another machine's session: deleting it ends that session.[0m
+Deleted 2 resources.
+[stderr]
+Deleting VM x0ne-engine-f00d42 ... done
+Deleting IP address x0ne-engine-ip1 ... done
+[exit 0]
+
+$ x0ne-engine cloud image import <DIR>/disk.tar.gz --reference <DIR>/x0ne-cvm-0.1.0.json --yes
+[stdout]
+Image import: <DIR>/disk.tar.gz (0.00 GiB, sha256 3c65ea93424a9c362fec0e3a69ea36031e8a358441479dd665cc6110eabe7b08, [32mmatches the reference[0m)
+  creates image x0ne-cvm-0-1-0 in project x0ne-test-project: [33mabout 0.01 USD per month of storage[0m (estimate, 0.05 USD/GiB/month, not read from the catalog)
+  through the transit bucket x0ne-engine-import-# in us-central1, deleted at the end (Google also drops its object after one day)
+Image x0ne-cvm-0-1-0 is [32mREADY[0m in project x0ne-test-project. Transit bucket deleted.
+[stderr]
+Reading <DIR>/disk.tar.gz ...
+  uploading <DIR>/disk.tar.gz to transit bucket x0ne-engine-import-# ...
+  creating image x0ne-cvm-0-1-0 (Google reads the upload; minutes) ...
+[exit 0]
+
+$ x0ne-engine cloud up --yes --max-cost 10   # refused
+[stderr]
+x0ne Engine cloud: Google Cloud, project x0ne-test-project
+Token OK: tester@example.com, expires in 59 min.
+[33m--max-run cut to 54 min (asked: 60 min): the token expires at # UTC and up cannot renew it, so the session ends by # UTC, 5 min before, to delete the VM with it.[0m
+Preflight: H100 spot quota in us-central1: 1 (used 0). No x0ne-engine VM running. Image x0ne-cvm-0-2-1 found.
+Firewall: tcp:443 from 198.51.100.23/32 only, this machine's public address as Google's name server sees it (--allow-from <CIDR> to widen).
+
+[1mQuote (Cloud Billing catalog, # UTC; estimate, billed by Google to your project)[0m
+  a3-highgpu-1g spot, 1x H100 80GB, Intel TDX   [33m  6.06 USD/h[0m
+  Confidential Computing on A3, spot            [33m  0.44 USD/h[0m
+    [2m(Google's pricing page, read 2026-10-16: https://cloud.google.com/confidential-computing/confidential-vm/pricing)[0m
+  external IP, boot disk                        [33m  0.01 USD/h[0m
+  [33mthe VM deletes itself at # UTC (54 min)[0m
+  [1;33mmaximum cost if it runs to the end              5.97 USD[0m
+  [33mSpot: Google may stop it at any time; you pay only the time used.[0m
+
+[1m[1/5] Creating x0ne-engine-<SESSION> in us-central1-a[0m ... done (#)
+[1m[2/5] Waiting for boot and GPU setup[0m ... done (#)
+[1m[3/5] Checking the hardware proof on THIS machine. No question and no session key have been sent yet.[0m
+      checking the TDX quote
+      [31mREFUSED (65): RTMR2 does not match the reference (fake)[0m
+      No question and no session key were sent to the VM.
+      Evidence saved for review: /fake/evidence.json (public data only)
+Deleting x0ne-engine-<SESSION> ... done. [33mEstimated cost: # USD.[0m
+[31mx0ne-engine cloud: proof refused: RTMR2 does not match the reference (fake)[0m
+[exit 65]
+
+$ x0ne-engine cloud up --yes --max-cost 10   # delete-fails, Ctrl-C
+[stderr]
+x0ne Engine cloud: Google Cloud, project x0ne-test-project
+Token OK: tester@example.com, expires in 59 min.
+[33m--max-run cut to 54 min (asked: 60 min): the token expires at # UTC and up cannot renew it, so the session ends by # UTC, 5 min before, to delete the VM with it.[0m
+Preflight: H100 spot quota in us-central1: 1 (used 0). No x0ne-engine VM running. Image x0ne-cvm-0-2-1 found.
+Firewall: tcp:443 from 198.51.100.23/32 only, this machine's public address as Google's name server sees it (--allow-from <CIDR> to widen).
+
+[1mQuote (Cloud Billing catalog, # UTC; estimate, billed by Google to your project)[0m
+  a3-highgpu-1g spot, 1x H100 80GB, Intel TDX   [33m  6.06 USD/h[0m
+  Confidential Computing on A3, spot            [33m  0.44 USD/h[0m
+    [2m(Google's pricing page, read 2026-10-16: https://cloud.google.com/confidential-computing/confidential-vm/pricing)[0m
+  external IP, boot disk                        [33m  0.01 USD/h[0m
+  [33mthe VM deletes itself at # UTC (54 min)[0m
+  [1;33mmaximum cost if it runs to the end              5.97 USD[0m
+  [33mSpot: Google may stop it at any time; you pay only the time used.[0m
+
+[1m[1/5] Creating x0ne-engine-<SESSION> in us-central1-a[0m ... done (#)
+[1m[2/5] Waiting for boot and GPU setup[0m ... done (#)
+[1m[3/5] Checking the hardware proof on THIS machine. No question and no session key have been sent yet.[0m
+      checking the TDX quote (fake)
+      [1mCPU[0m   fake verdict
+      [1mGPU[0m   fake verdict
+      [1;32mVERIFIED[0m. Limits: x0ne-engine cloud status --limits
+[1m[4/5] Releasing the session key to the verified VM ...[0m
+      model loaded (fake)
+[1m[5/5] OpenAI API on http://127.0.0.1:8478/v1[0m  (key: /fake/local.key)
+      Context: 40960 tokens, prompt and answer together.
+      [33m# min left: the session ends 5 min before the token expires (# UTC).[0m Ctrl-C stops the session and deletes the VM.
+Deleting x0ne-engine-<SESSION> ... [1;31mNOT CONFIRMED[0m
+[1;31mCRITICAL: the deletion of x0ne-engine-<SESSION> could not be confirmed: VM x0ne-engine-<SESSION>: HTTP 500 backendError: Internal error ?[31m[0m
+  [33mIt deletes itself by # UTC at the latest (max 5.97 USD). Delete it now:[0m
+    gcloud compute instances delete x0ne-engine-<SESSION> --zone us-central1-a --project x0ne-test-project --quiet
+    gcloud compute firewall-rules delete x0ne-engine-<SESSION> --project x0ne-test-project --quiet
+  or: x0ne-engine cloud down (asks for a token), then x0ne-engine cloud sweep
+[1;31mx0ne-engine cloud: CRITICAL: deletion of x0ne-engine-<SESSION> not confirmed: VM x0ne-engine-<SESSION>: HTTP 500 backendError: Internal error ?[31m[0m
+[exit 94]
+
+$ x0ne-engine cloud up --yes --max-cost 1   # above-max-cost
+[stderr]
+x0ne Engine cloud: Google Cloud, project x0ne-test-project
+Token OK: tester@example.com, expires in 59 min.
+[33m--max-run cut to 54 min (asked: 60 min): the token expires at # UTC and up cannot renew it, so the session ends by # UTC, 5 min before, to delete the VM with it.[0m
+Preflight: H100 spot quota in us-central1: 1 (used 0). No x0ne-engine VM running. Image x0ne-cvm-0-2-1 found.
+Firewall: tcp:443 from 198.51.100.23/32 only, this machine's public address as Google's name server sees it (--allow-from <CIDR> to widen).
+
+[1mQuote (Cloud Billing catalog, # UTC; estimate, billed by Google to your project)[0m
+  a3-highgpu-1g spot, 1x H100 80GB, Intel TDX   [33m  6.06 USD/h[0m
+  Confidential Computing on A3, spot            [33m  0.44 USD/h[0m
+    [2m(Google's pricing page, read 2026-10-16: https://cloud.google.com/confidential-computing/confidential-vm/pricing)[0m
+  external IP, boot disk                        [33m  0.01 USD/h[0m
+  [33mthe VM deletes itself at # UTC (54 min)[0m
+  [1;33mmaximum cost if it runs to the end              5.97 USD[0m
+  [33mSpot: Google may stop it at any time; you pay only the time used.[0m
+[31mx0ne-engine cloud: the maximum cost 5.97 USD is above --max-cost 1.00; nothing was created[0m
+[exit 90]
+

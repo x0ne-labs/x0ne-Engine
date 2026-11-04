@@ -1,0 +1,14 @@
+
+running 9 tests
+test x1a_session_greedy_equals_engine_greedy ... ok
+test x1b_session_logits_bitwise ... ok
+test x2_session_kl_per_position ... ok
+test x2_session_perplexity_within_gate ... ok
+test x2_session_top1_agreement ... ok
+test x3_memory_stable_over_1000_sessions ... ok
+test x3_next_request_unchanged ... ok
+test x3_scrub_on_every_path ... ok
+test x4_step_is_one_launch_and_two_copies ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 132.24s
+

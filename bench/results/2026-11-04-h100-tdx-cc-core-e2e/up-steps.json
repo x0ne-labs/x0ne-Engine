@@ -1,0 +1,102 @@
+{
+ "lines": [
+  {
+   "t_first": 16.149,
+   "t_end": 55.141,
+   "text": "[1/5] Creating x0ne-engine-<id> in us-east5-a ... done (38 s)"
+  },
+  {
+   "t_first": 55.153,
+   "t_end": 55.851,
+   "text": "[2/5] Waiting for boot and GPU setup ... done (0 s)"
+  },
+  {
+   "t_first": 55.863,
+   "t_end": 55.863,
+   "text": "[3/5] Checking the hardware proof on THIS machine. Nothing has been sent yet."
+  },
+  {
+   "t_first": 55.863,
+   "t_end": 55.863,
+   "text": "      waiting for the TD at <withheld>:443 (boot deadline 1793806729)"
+  },
+  {
+   "t_first": 117.698,
+   "t_end": 117.698,
+   "text": "      attestation document received; checking it on this machine, no question and no session key sent yet"
+  },
+  {
+   "t_first": 120.542,
+   "t_end": 120.542,
+   "text": "      CPU   Intel TDX quote genuine, TCB UpToDate / QE UpToDate, TDX module identity matched, PCK not on Intel's CRL, its CA and Intel's TCB signer not on Intel's root CA CRL (Intel PCS standard collateral, fetched now: TCB evaluation 20, collateral at most 86400 s old; transparent TCB policy, Intel's latest collateral on the TCB line)"
+  },
+  {
+   "t_first": 120.542,
+   "t_end": 120.542,
+   "text": "      Firm  Google-endorsed firmware binary 53c558fe... measures the quoted MRTD c1ee9c16... (svn 2, signed C=USA, ST=WA, L=Kirkland, O=Google, OU=Engineering, CN=GCE-uefi-signer, serialNumber=30)"
+  },
+  {
+   "t_first": 120.542,
+   "t_end": 120.542,
+   "text": "      Image x0ne-cvm 0.2.9 (reference signed 2026-11-04 by archive subkey with key ID 010D0382FD71EF0C; TEST key, not for release; logged at index 0 of test.invalid/x0ne-engine/tlog, size 1): RTMR1, RTMR2 match the reference; RTMR3 empty; RTMR0 pinned (the endorsed firmware's configuration volume, the reference's host events)"
+  },
+  {
+   "t_first": 120.542,
+   "t_end": 120.542,
+   "text": "      GPU   1 GPU(s), confidential computing on (NRAS tokens, nonce bound to this session, then to each connection's TLS exporter and quote)"
+  },
+  {
+   "t_first": 120.542,
+   "t_end": 120.542,
+   "text": "      Link  TLS key and your session config are bound to this quote"
+  },
+  {
+   "t_first": 120.542,
+   "t_end": 120.542,
+   "text": "      Model qwen3:8b, digest e1776f7c... matches the catalog"
+  },
+  {
+   "t_first": 120.542,
+   "t_end": 120.542,
+   "text": "      VERIFIED. Platform TCB 2026-02-11, OutOfDate under Intel's TCB evaluation 22; Intel advisories not fixed: INTEL-DOC-10003, INTEL-SA-01439, INTEL-SA-01442 (transparent TCB policy). Limits: x0ne-engine cloud status --limits"
+  },
+  {
+   "t_first": 120.554,
+   "t_end": 120.554,
+   "text": "[4/5] Releasing the session key to the verified VM ..."
+  },
+  {
+   "t_first": 120.554,
+   "t_end": 120.554,
+   "text": "      verdict VERIFIED; sending the session key over the attested channel"
+  },
+  {
+   "t_first": 120.631,
+   "t_end": 120.631,
+   "text": "      key accepted; waiting for the TD to load the model"
+  },
+  {
+   "t_first": 131.603,
+   "t_end": 131.603,
+   "text": "[5/5] OpenAI API on http://127.0.0.1:8478/v1  (key: /tmp/run/x0ne-engine/local.key)"
+  }
+ ],
+ "steps": {
+  "1 creation": {
+   "s": 38.992,
+   "up_says_s": 38
+  },
+  "2 boot wait": {
+   "s": 0.698
+  },
+  "3 proof": {
+   "s": 64.691
+  },
+  "4 key and model": {
+   "s": 11.049
+  },
+  "total to [5/5]": {
+   "s": 131.603
+  }
+ }
+}

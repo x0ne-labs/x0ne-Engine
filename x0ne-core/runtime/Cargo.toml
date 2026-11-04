@@ -1,0 +1,20 @@
+[package]
+name = "x0ne-core-runtime"
+description = "Typed arena, safetensors loader, Qwen3 weight packing, bandwidth ceiling, and the E1 test surface."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+half.workspace = true
+memmap2.workspace = true
+safetensors.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+x0ne-core-kernels = { path = "../kernels" }
+
+[dev-dependencies]
+x0ne-core-oracle = { path = "../oracle" }

@@ -1,0 +1,6 @@
+random ids [0,151643), seed 20261104, 1 warm-up + 5 measured per length, no common first token
+in128.json 6 prompts x 128 ids sha256 b61825cb86c108eae29a36400122715613bda3041bf403c7c14cd997b0c770f3
+in1024.json 6 prompts x 1024 ids sha256 a42f4ccc94e31702a7955f2e38c8fdbe85d23f7461fc41859f6b0ffcb84aa9e1
+in4096.json 6 prompts x 4096 ids sha256 46524629a61775183c494c3013e33fac9602e2d537823b45d2b0bb28ebe1fb87
+in8192.json 6 prompts x 8192 ids sha256 0c9d216fdf68df843b83102a31736f837a050af3f67e3b9a633fddb6b55dfd63
+in16384.json 6 prompts x 16384 ids sha256 eff139464b49a7394346f2e61c7d6f05c6a2eb50e71f5a555d67b6f9f65e02ea
