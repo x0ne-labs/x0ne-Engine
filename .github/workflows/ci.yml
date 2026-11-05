@@ -134,6 +134,13 @@ jobs:
           df -h /
       - run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --no-self-update
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # AppArmor on ubuntu-24.04 strips capabilities from unprivileged user namespaces:
+      # hide_files (x0ne-engine-cloud tests) failed with EACCES on 2026-11-05. The runner
+      # is disposable. https://github.com/actions/runner-images/issues/10443
+      - name: Allow unprivileged user namespaces
+        run: |
+          sudo sysctl kernel.apparmor_restrict_unprivileged_userns
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       # `--all-targets` skips doctests: first step.
       - name: test (doctests and default features)
         run: cargo test --locked --workspace
