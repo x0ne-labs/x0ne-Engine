@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Fake gcloud for tests/gcp_cvm_recipe.rs: plays scripts/gcp-cvm.sh without a
 # cloud. Each call is appended to $FAKE_GCLOUD_LOG. `compute ssh --command` runs
-# the command in $FAKE_VM_HOME, the VM's home, with $FAKE_VM_BIN first in PATH
-# and nothing else of this environment; `compute scp` copies to and from it.
+# the command in $FAKE_VM_HOME, the VM's home, with $FAKE_VM_BIN first in PATH,
+# nothing else of this environment and no configfs (/sys/kernel/config/ is read
+# under $FAKE_VM_HOME); `compute scp` copies to and from it.
 # What only a real VM does (packages, reboot, GPU, an interactive shell) is
 # refused with 255, as an unreachable host would be.
 set -u
@@ -32,6 +33,10 @@ case "${1:-}" in
       *apt-get*|*update-initramfs*|*reboot*|*nvidia-smi*|*modprobe*|*systemctl*)
         echo "fake gcloud: needs a real VM, refused: ${cmd:0:60}" >&2; exit 255 ;;
     esac
+    # The VM's configfs is $FAKE_VM_HOME/sys/kernel/config, absent: the ubuntu-24.04
+    # runner's own configfs-tsm (root-owned, 2026-11-05) failed `measure` with 1, not 64.
+    cfs=/sys/kernel/config/
+    cmd=${cmd//"$cfs"/"$FAKE_VM_HOME$cfs"}
     cd "$FAKE_VM_HOME" || exit 255
     exec env -i HOME="$FAKE_VM_HOME" PATH="$FAKE_VM_BIN:/usr/bin:/bin" \
       TMPDIR="$FAKE_VM_HOME/tmp" FAKE_INFER_BIN="${FAKE_INFER_BIN:-}" bash -c "$cmd" ;;

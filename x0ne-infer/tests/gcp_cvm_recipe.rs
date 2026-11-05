@@ -1,6 +1,7 @@
 //! scripts/gcp-cvm.sh against a fake `gcloud` (tests/gcp_cvm/): no cloud, no
-//! VM, no network. Each phase runs as far as a host without TDX or a GPU lets
-//! it; what only a real VM does (packages, reboot, GPU) the fake refuses with
+//! VM, no network. Each phase runs as far as a VM without TDX or a GPU lets
+//! it (the recipe's commands see no configfs, whatever the host has); what only
+//! a real VM does (packages, reboot, GPU) the fake refuses with
 //! 255. The server is this build's x0ne-infer, put where `build` leaves it:
 //! with the registers the operator pinned it stops with its own exit code (64
 //! here, no TDX), never the 87 of a release build with nothing pinned, and
