@@ -967,7 +967,7 @@ pub fn tdx_tcb_level(
     Err(TcbRejected::BelowEveryLevel)
 }
 
-/// The QE's status against the published TD_QE identity: MRSIGNER,
+/// The QE's status against the published TD_QE identity, schema 2: MRSIGNER,
 /// ISVPRODID, MISCSELECT/ATTRIBUTES under their masks, then the ISVSVN
 /// level. Field offsets are the SGX report body layout (384 bytes).
 pub fn qe_status(identity: &serde_json::Value, qe_report: &[u8]) -> Result<TcbStatus, TcbRejected> {
@@ -987,6 +987,14 @@ pub fn qe_level(identity: &serde_json::Value, qe_report: &[u8]) -> Result<Rating
         return Err(err(format!(
             "identity id {:?}, expected \"TD_QE\"",
             identity["id"]
+        )));
+    }
+    // SECURITY: unchecked until 2026-11-05, while tcbInfo refused all but 3. Intel's QVL
+    // takes TD_QE at 2 and refuses 1; the 3 identities vendored from Intel are 2.
+    if identity["version"].as_u64() != Some(2) {
+        return Err(err(format!(
+            "identity version {:?}, this verifier implements 2",
+            identity["version"]
         )));
     }
     let field = |name: &str| -> Result<Vec<u8>, TcbRejected> {
@@ -1913,7 +1921,7 @@ mod tests {
     fn a_malformed_hex_field_of_the_qe_identity_is_refused_not_a_panic() {
         let report = [0u8; 384];
         for bad in ["€0", "€", "0", "0g", "+f"] {
-            let identity = serde_json::json!({"id": "TD_QE", "miscselect": bad});
+            let identity = serde_json::json!({"id": "TD_QE", "version": 2, "miscselect": bad});
             let e = qe_status(&identity, &report).unwrap_err();
             assert!(
                 e.to_string().contains("miscselect is not hex"),
@@ -1921,8 +1929,9 @@ mod tests {
             );
         }
         // Intel publishes uppercase hex: accepted, and the next field is reached.
-        let identity =
-            serde_json::json!({"id": "TD_QE", "miscselect": "0000000A", "miscselectMask": "€€"});
+        let identity = serde_json::json!({
+            "id": "TD_QE", "version": 2, "miscselect": "0000000A", "miscselectMask": "€€"
+        });
         let e = qe_status(&identity, &report).unwrap_err();
         assert!(e.to_string().contains("miscselectMask is not hex"), "{e}");
     }

@@ -314,6 +314,7 @@ fn miscselect_is_read_at_offset_16_not_inside_cpusvn() {
     qe[16..20].copy_from_slice(&[0xAA, 0xBB, 0xCC, 0xDD]); // the real field
     let identity = serde_json::json!({
         "id": "TD_QE",
+        "version": 2,
         "miscselect": "AABBCCDD",
         "miscselectMask": "FFFFFFFF",
         "attributes": "00000000000000000000000000000000",
@@ -327,6 +328,57 @@ fn miscselect_is_read_at_offset_16_not_inside_cpusvn() {
     wrong[16..20].copy_from_slice(&[0, 0, 0, 0]);
     let err = format!("{:?}", qe_status(&identity, &wrong).unwrap_err());
     assert!(err.contains("MISCSELECT"), "{err}");
+}
+
+/// The real TD_QE identity and the QE report of the vendored quote.
+fn real_qe() -> (serde_json::Value, [u8; 384]) {
+    let body: serde_json::Value = serde_json::from_str(QE_IDENTITY).unwrap();
+    let qe = tcb::qe_report(QUOTE).unwrap();
+    (body["enclaveIdentity"].clone(), qe)
+}
+
+/// SECURITY: a failure means this verifier reads a QE identity schema it does
+/// not implement as if it were version 2, where tcbInfo refuses all but 3.
+#[test]
+fn a_qe_identity_of_another_schema_version_is_refused_by_name() {
+    use x0ne_infer::tcb::qe_status;
+    let (identity, qe) = real_qe();
+    assert!(matches!(qe_status(&identity, &qe), Ok(TcbStatus::UpToDate)));
+    for version in [
+        serde_json::json!(1),
+        serde_json::json!(3),
+        serde_json::json!("2"),
+        serde_json::Value::Null,
+    ] {
+        let mut other = identity.clone();
+        other["version"] = version.clone();
+        let err = format!("{:?}", qe_status(&other, &qe));
+        assert!(err.contains("identity version"), "{version}: {err}");
+    }
+}
+
+/// SECURITY: a failure means an old QE is judged by a level it does not reach,
+/// or by none. ISVSVN sits at byte 258 of the report; the real quote has 5.
+#[test]
+fn the_qe_isvsvn_is_judged_against_the_published_levels() {
+    use x0ne_infer::tcb::qe_status;
+    let (mut identity, mut qe) = real_qe();
+    assert_eq!(u16::from_le_bytes([qe[258], qe[259]]), 5);
+    identity["tcbLevels"] = serde_json::json!([
+        {"tcb": {"isvsvn": 6}, "tcbDate": "2026-08-01T00:00:00Z", "tcbStatus": "UpToDate"},
+        {"tcb": {"isvsvn": 4}, "tcbDate": "2025-08-01T00:00:00Z", "tcbStatus": "OutOfDate"},
+    ]);
+    let rated = qe_status(&identity, &qe).unwrap();
+    assert_eq!(rated, TcbStatus::OutOfDate);
+    assert!(!rated.accepted());
+    qe[258] = 6;
+    assert_eq!(qe_status(&identity, &qe).unwrap(), TcbStatus::UpToDate);
+    qe[258] = 3;
+    let err = qe_status(&identity, &qe).unwrap_err().to_string();
+    assert!(
+        err.contains("QE ISVSVN 3 is below every published level"),
+        "{err}"
+    );
 }
 
 /// The duplicate-key killer (critical): the signature was
