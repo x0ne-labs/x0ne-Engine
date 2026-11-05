@@ -208,7 +208,9 @@ fn redirect_refusal(reach: Reach, to: &reqwest::Url) -> Option<String> {
             return None;
         }
         let scheme = to.scheme();
-        return Some(format!("redirect to a non-https URL refused: {scheme}://{host}"));
+        return Some(format!(
+            "redirect to a non-https URL refused: {scheme}://{host}"
+        ));
     }
     let why = non_public_host(host)?;
     match reach {

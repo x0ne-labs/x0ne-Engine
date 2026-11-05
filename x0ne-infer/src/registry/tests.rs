@@ -1887,21 +1887,36 @@ fn a_redirect_is_judged_as_the_source_itself() {
         }
         assert_eq!(redirect_refusal(Reach::Private, &url(to)), None, "{to}");
     }
-    for to in ["https://127.0.0.1/m", "https://[::1]:8443/m", "https://localhost/m"] {
+    for to in [
+        "https://127.0.0.1/m",
+        "https://[::1]:8443/m",
+        "https://localhost/m",
+    ] {
         let e = redirect_refusal(Reach::Public, &url(to)).expect(to);
         assert!(e.contains("loopback"), "{to}: {e}");
         assert_eq!(redirect_refusal(Reach::Loopback, &url(to)), None, "{to}");
         assert_eq!(redirect_refusal(Reach::Private, &url(to)), None, "{to}");
     }
     // Plain http from a loopback endpoint to the loopback, and nothing else.
-    for to in ["http://127.0.0.1:1/m", "http://localhost:1/m", "http://[::1]:1/m"] {
+    for to in [
+        "http://127.0.0.1:1/m",
+        "http://localhost:1/m",
+        "http://[::1]:1/m",
+    ] {
         assert_eq!(redirect_refusal(Reach::Loopback, &url(to)), None, "{to}");
         for reach in [Reach::Public, Reach::Private] {
-            assert!(redirect_refusal(reach, &url(to)).is_some(), "{reach:?} {to}");
+            assert!(
+                redirect_refusal(reach, &url(to)).is_some(),
+                "{reach:?} {to}"
+            );
         }
     }
     for reach in [Reach::Public, Reach::Loopback, Reach::Private] {
-        for to in ["http://w.example/m", "http://10.0.0.1/m", "ftp://w.example/m"] {
+        for to in [
+            "http://w.example/m",
+            "http://10.0.0.1/m",
+            "ftp://w.example/m",
+        ] {
             let e = redirect_refusal(reach, &url(to)).unwrap_or_else(|| panic!("{reach:?} {to}"));
             assert!(e.contains("non-https"), "{to}: {e}");
         }
