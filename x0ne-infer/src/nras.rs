@@ -362,6 +362,13 @@ fn verified_claims(
             header["alg"]
         )));
     }
+    // SECURITY: RFC 7515, 4.1.11: an extension listed and not understood makes the JWS
+    // invalid, and none is understood here. 8 real runs carry `alg` and `kid` alone (2026-11-05).
+    if header.get("crit").is_some() {
+        return Err(NrasRejected::Header(
+            "crit is present and this verifier understands no JWS extension".into(),
+        ));
+    }
     let kid = header["kid"]
         .as_str()
         .ok_or_else(|| NrasRejected::Header("no kid".into()))?;
@@ -874,12 +881,17 @@ pub(crate) mod tests {
         pub(crate) gpu_serials: Vec<String>,
         /// Signs further tokens under the same leaf, for the refusal tests.
         pub(crate) sign: std::sync::Arc<dyn Fn(&serde_json::Value) -> String + Send + Sync>,
+        /// The same, under the JWS header given first.
+        pub(crate) sign_with_header: HeaderSigner,
         /// The x5c as DER, and the signer of the intermediate's key: a test
         /// staples OCSP responses about the leaf with them.
         pub(crate) leaf_der: Vec<u8>,
         pub(crate) inter_der: Vec<u8>,
         pub(crate) inter_signer: crate::nras_ocsp::tests::Signer,
     }
+
+    type HeaderSigner =
+        std::sync::Arc<dyn Fn(&serde_json::Value, &serde_json::Value) -> String + Send + Sync>;
 
     /// 2^64: one past `u64`, so a serial read through a machine integer
     /// instead of a big one cannot produce it.
@@ -1044,6 +1056,7 @@ pub(crate) mod tests {
         // The JWT, signed with the leaf key.
         let kid = "nv-eat-kid-test-1";
         let sign = es384_signer(&leaf_kp, kid);
+        let sign_with_header = es384_signer_with_header(&leaf_kp);
         let per_gpu = vec![(
             "GPU-0".to_string(),
             sign(&gpu_claims(nonce_hex, exp, GPU_SERIAL_DECIMAL)),
@@ -1072,6 +1085,7 @@ pub(crate) mod tests {
             per_gpu,
             gpu_serials: vec![GPU_SERIAL_DECIMAL.to_string()],
             sign,
+            sign_with_header,
             leaf_der: leaf_cert.der().to_vec(),
             inter_der,
             inter_signer: crate::nras_ocsp::tests::Signer::of(inter_issuer.key()),
@@ -1083,6 +1097,13 @@ pub(crate) mod tests {
         leaf_kp: &KeyPair,
         kid: &str,
     ) -> std::sync::Arc<dyn Fn(&serde_json::Value) -> String + Send + Sync> {
+        let sign = es384_signer_with_header(leaf_kp);
+        let header = serde_json::json!({"alg": "ES384", "kid": kid});
+        std::sync::Arc::new(move |claims: &serde_json::Value| sign(&header, claims))
+    }
+
+    /// Signs EATs under any JWS header (ES384) with an rcgen P-384 leaf key.
+    fn es384_signer_with_header(leaf_kp: &KeyPair) -> HeaderSigner {
         let leaf_sk = p384::SecretKey::from_sec1_pem(&leaf_kp.serialize_pem())
             .map(p384::ecdsa::SigningKey::from)
             .or_else(|_| {
@@ -1090,16 +1111,17 @@ pub(crate) mod tests {
                     .map(|sk: p384::SecretKey| p384::ecdsa::SigningKey::from(sk))
             })
             .expect("leaf key readable");
-        let header = serde_json::json!({"alg": "ES384", "kid": kid});
-        std::sync::Arc::new(move |claims: &serde_json::Value| {
-            let signed = format!(
-                "{}.{}",
-                b64url_enc(serde_json::to_vec(&header).unwrap().as_slice()),
-                b64url_enc(serde_json::to_vec(claims).unwrap().as_slice())
-            );
-            let sig: p384::ecdsa::Signature = leaf_sk.sign(signed.as_bytes());
-            format!("{signed}.{}", b64url_enc(&sig.to_bytes()))
-        })
+        std::sync::Arc::new(
+            move |header: &serde_json::Value, claims: &serde_json::Value| {
+                let signed = format!(
+                    "{}.{}",
+                    b64url_enc(serde_json::to_vec(header).unwrap().as_slice()),
+                    b64url_enc(serde_json::to_vec(claims).unwrap().as_slice())
+                );
+                let sig: p384::ecdsa::Signature = leaf_sk.sign(signed.as_bytes());
+                format!("{signed}.{}", b64url_enc(&sig.to_bytes()))
+            },
+        )
     }
 
     fn attest(
@@ -1704,6 +1726,33 @@ pub(crate) mod tests {
             verify_nras_token(&bad.token, &bad.jwks, &bad.nonce_hex, 1_500, &bad.pins),
             Err(NrasRejected::Claims(_))
         ));
+    }
+
+    /// SECURITY: a failure means extensions the signer says must be understood
+    /// are ignored, on a token RFC 7515, 4.1.11, calls invalid. Listed or not.
+    #[test]
+    fn a_token_whose_header_has_crit_is_refused_whatever_it_lists() {
+        let fx = build_fixture(true, NONCE, 2_000);
+        let payload = fx.token.split('.').nth(1).unwrap();
+        let claims: serde_json::Value = serde_json::from_slice(&b64url(payload).unwrap()).unwrap();
+        let kid = "nv-eat-kid-test-1";
+        let plain =
+            (fx.sign_with_header)(&serde_json::json!({"alg": "ES384", "kid": kid}), &claims);
+        verify_nras_token(&plain, &fx.jwks, NONCE, 1_500, &fx.pins).expect("the control");
+        for crit in [
+            serde_json::json!(["x-ext"]),
+            serde_json::json!([]),
+            serde_json::json!("x-ext"),
+            serde_json::Value::Null,
+        ] {
+            let header = serde_json::json!({"alg": "ES384", "kid": kid, "crit": crit, "x-ext": 1});
+            let token = (fx.sign_with_header)(&header, &claims);
+            let r = verify_nras_token(&token, &fx.jwks, NONCE, 1_500, &fx.pins);
+            assert!(
+                matches!(&r, Err(NrasRejected::Header(why)) if why.contains("crit")),
+                "{crit}: {r:?}"
+            );
+        }
     }
 
     /// SECURITY: a failure means a token that answers no nonce is accepted

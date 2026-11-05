@@ -11,6 +11,7 @@ the first non-beta tag will freeze the receipt protocol below.
 - An NRAS token without `eat_nonce`, or an empty expected nonce, is refused by name; an absent claim used to read as an empty nonce.
 - A TDX quote whose QE report has a non-zero `report_data[32..64]` is refused; Intel's TD QE writes zeros there, and no check read them.
 - A QE identity whose schema version is not 2 is refused by name, as tcbInfo already was for any version but 3.
+- An NRAS token whose JWS header has `crit` is refused (RFC 7515, 4.1.11); this verifier understands no extension and read past it.
 
 ## 0.2.0-beta.7 — 2026-11-04
 
