@@ -86,6 +86,8 @@ pub enum PcsRejected {
     QeSignature,
     #[error("attestation key is not bound by the QE report (report_data mismatch)")]
     AttestationKeyBinding,
+    #[error("the QE report's report_data[32..64] is not zero")]
+    QeReportDataTail,
     #[error("quote signature does not verify under the attestation key")]
     QuoteSignature,
     #[error("TD report: {0}")]
@@ -393,7 +395,7 @@ pub fn verify_tdx_chain(
         .map_err(|_| PcsRejected::QeSignature)?;
 
     // ── The QE report binds the attestation key ─────────────────────────
-    // qe_report.report_data[0..32] == SHA-256(attestation_key ‖ qe_auth_data)
+    // qe_report.report_data == SHA-256(attestation_key ‖ qe_auth_data) ‖ 32 zero bytes
     let report_data = &sig.qe_report[320..384];
     let mut h = Sha256::new();
     h.update(sig.attestation_key);
@@ -401,6 +403,11 @@ pub fn verify_tdx_chain(
     let expect: [u8; 32] = h.finalize().into();
     if report_data[..32] != expect {
         return Err(PcsRejected::AttestationKeyBinding);
+    }
+    // SECURITY: Intel's TD QE zeroes these bytes (DCAP 72f800e, quoting_enclave_tdqe.cpp:851,
+    // 986). go-tdx-guest requires it, Intel's QVL does not (2026-11-05); no real quote differs.
+    if report_data[32..] != [0u8; 32] {
+        return Err(PcsRejected::QeReportDataTail);
     }
 
     // ── The quote, signed by the attestation key ────────────────────────
@@ -893,6 +900,32 @@ pub(crate) mod tests {
         fx.quote[HEADER + 10] ^= 1;
         let r = verify_tdx_chain(&fx.quote, &TrustAnchor::RootDer(fx.root_der), NOW);
         assert_eq!(r.unwrap_err(), PcsRejected::QuoteSignature);
+    }
+
+    /// SECURITY: a failure means a QE report signed by the PCK may carry 32
+    /// bytes no check reads, where Intel's TD QE writes zeros.
+    #[test]
+    fn a_qe_report_whose_report_data_does_not_end_in_zeros_is_refused() {
+        let root = root_issuer();
+        let (ca_pem, ca, ca_key) = issued("Intel SGX PCK Platform CA", Some(true), &root);
+        let (pck_pem, _, pck_key) = issued(
+            "Intel SGX PCK Certificate",
+            Some(false),
+            &issuer_of(&ca, &ca_key),
+        );
+        let control = quote_with_chain(&format!("{pck_pem}{ca_pem}"), &pck_key);
+        assert_eq!(chain_refusal(&control), "verified");
+        let pck = p256_of(&KeyPair::try_from(pck_key.as_slice()).unwrap());
+        // Quote signature, attestation key, data type and size, then the QE report.
+        let report = SIGNED_LEN + 4 + 64 + 64 + 2 + 4;
+        for at in [320 + 32, 320 + 63] {
+            let mut fx = quote_with_chain(&format!("{pck_pem}{ca_pem}"), &pck_key);
+            fx.quote[report + at] = 1;
+            let sig: Signature = pck.sign(&fx.quote[report..report + 384]);
+            fx.quote[report + 384..report + 448].copy_from_slice(&sig.to_bytes());
+            let e = chain_refusal(&fx);
+            assert!(e.contains("is not zero"), "byte {at}: {e}");
+        }
     }
 
     /// A swapped attestation key fails the QE binding — the exact spot a

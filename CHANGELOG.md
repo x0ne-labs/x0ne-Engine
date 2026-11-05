@@ -9,6 +9,7 @@ the first non-beta tag will freeze the receipt protocol below.
 
 - Receipt checks refuse a small-order session key (`verify_strict`); the identity point verified one signature over every body.
 - An NRAS token without `eat_nonce`, or an empty expected nonce, is refused by name; an absent claim used to read as an empty nonce.
+- A TDX quote whose QE report has a non-zero `report_data[32..64]` is refused; Intel's TD QE writes zeros there, and no check read them.
 
 ## 0.2.0-beta.7 — 2026-11-04
 
