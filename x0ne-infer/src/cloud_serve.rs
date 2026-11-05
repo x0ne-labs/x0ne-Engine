@@ -100,7 +100,7 @@ pub const DEFAULT_MAX_HANDSHAKES: usize = 256;
 /// hyper 1.11 arms this on an idle connection too, and a relay's request leaving as that
 /// connection closes fails and loses its session (287 of 1000 on a swept gap, 2026-11-05):
 /// long, and off the hour a client might poll at.
-pub const DEFAULT_HEAD_TIMEOUT: Duration = Duration::from_secs(61 * 60);
+pub const DEFAULT_HEAD_TIMEOUT: Duration = Duration::from_mins(61);
 
 /// The bounds on TLS handshakes: the only work the TD does for a peer
 /// before mutual TLS has said who it is. And the bound on what follows the
