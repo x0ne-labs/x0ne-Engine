@@ -8,6 +8,7 @@ the first non-beta tag will freeze the receipt protocol below.
 ### Security
 
 - Receipt checks refuse a small-order session key (`verify_strict`); the identity point verified one signature over every body.
+- An NRAS token without `eat_nonce`, or an empty expected nonce, is refused by name; an absent claim used to read as an empty nonce.
 
 ## 0.2.0-beta.7 — 2026-11-04
 

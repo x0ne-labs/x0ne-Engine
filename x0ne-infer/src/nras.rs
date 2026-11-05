@@ -322,7 +322,16 @@ fn verified_overall(
 }
 
 fn check_nonce(claims: &serde_json::Value, expected_nonce_hex: &str) -> Result<(), NrasRejected> {
-    let nonce = claims["eat_nonce"].as_str().unwrap_or_default();
+    // SECURITY: an absent claim read as "" and answered an empty nonce (measured
+    // 2026-11-05). In-tree callers pass 64 hex digits; the API held no such floor.
+    if expected_nonce_hex.is_empty() {
+        return Err(NrasRejected::Claims(
+            "no nonce of ours to compare eat_nonce with".into(),
+        ));
+    }
+    let nonce = claims["eat_nonce"]
+        .as_str()
+        .ok_or_else(|| NrasRejected::Claims("no eat_nonce in the token".into()))?;
     if !nonce.eq_ignore_ascii_case(expected_nonce_hex) {
         return Err(NrasRejected::Claims("eat_nonce does not match ours".into()));
     }
@@ -1695,6 +1704,31 @@ pub(crate) mod tests {
             verify_nras_token(&bad.token, &bad.jwks, &bad.nonce_hex, 1_500, &bad.pins),
             Err(NrasRejected::Claims(_))
         ));
+    }
+
+    /// SECURITY: a failure means a token that answers no nonce is accepted
+    /// as fresh by a caller whose nonce came out empty: no anti-replay.
+    #[test]
+    fn a_token_with_no_nonce_answers_no_caller_not_even_an_empty_nonce() {
+        let fx = build_fixture(true, NONCE, 2_000);
+        let payload = fx.token.split('.').nth(1).unwrap();
+        let claims: serde_json::Value = serde_json::from_slice(&b64url(payload).unwrap()).unwrap();
+        let mut absent = claims.clone();
+        absent.as_object_mut().unwrap().remove("eat_nonce");
+        let mut not_text = claims.clone();
+        not_text["eat_nonce"] = serde_json::json!([NONCE]);
+        let mut empty = claims;
+        empty["eat_nonce"] = serde_json::json!("");
+        for (what, claims) in [("absent", absent), ("array", not_text), ("empty", empty)] {
+            let token = (fx.sign)(&claims);
+            for expected in ["", NONCE] {
+                let r = verify_nras_token(&token, &fx.jwks, expected, 1_500, &fx.pins);
+                assert!(
+                    matches!(&r, Err(NrasRejected::Claims(why)) if why.contains("eat_nonce")),
+                    "{what} against {expected:?}: {r:?}"
+                );
+            }
+        }
     }
 
     // ── Intermediate 005 (P-384) next to 004 (RSA) ────────────────
