@@ -1,4 +1,4 @@
-<h1 align="center">x0ne Engine</h1>
+<h1 align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg"><img src="docs/assets/logo-light.svg" alt="x0ne Confidential Engine" width="520"></picture></h1>
 <p align="center"><strong>Confidential AI inference, verified on your machine. Preview.</strong></p>
 <p align="center">
   <a href="https://github.com/x0ne-labs/x0ne-Engine/actions/workflows/ci.yml"><img src="https://github.com/x0ne-labs/x0ne-Engine/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
