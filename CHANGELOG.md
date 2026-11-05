@@ -5,13 +5,34 @@ the first non-beta tag will freeze the receipt protocol below.
 
 ## Unreleased
 
+## 0.2.0-beta.7 — 2026-11-05
+
+This version's number was set on 2026-10-18, by the entries at the end of
+this section; the others landed until 2026-11-05.
+
 ### Security
 
-- Receipt checks refuse a small-order session key (`verify_strict`); the identity point verified one signature over every body.
-- An NRAS token without `eat_nonce`, or an empty expected nonce, is refused by name; an absent claim used to read as an empty nonce.
-- A TDX quote whose QE report has a non-zero `report_data[32..64]` is refused; Intel's TD QE writes zeros there, and no check read them.
-- A QE identity whose schema version is not 2 is refused by name, as tcbInfo already was for any version but 3.
-- An NRAS token whose JWS header has `crit` is refused (RFC 7515, 4.1.11); this verifier understands no extension and read past it.
+- Receipt signatures are checked with `verify_strict` (2026-11-05). `verify`
+  accepted a small-order key: with the identity point as the key, the
+  signature (R = identity, s = 0) verified over every body, and
+  `receipt::verify_signed` passed such a forged receipt. The relay and the
+  client compare the receipt's key with the attested one next, and refused it
+  already.
+- An NRAS token without `eat_nonce` is refused by name, and so is an empty
+  expected nonce (2026-11-05). An absent claim read as an empty nonce and
+  matched an empty expected one. Every caller in this tree passes 64 hex
+  digits.
+- A TDX quote whose QE report carries non-zero bytes in
+  `report_data[32..64]` is refused (2026-11-05). No check read them; Intel's
+  TD QE writes zeros there. Producing such a report takes the PCK key or a QE
+  other than Intel's: no attack is known.
+- A QE identity whose schema version is not 2 is refused by name
+  (2026-11-05), as a tcbInfo of any version but 3 already was. Such a
+  document needs Intel's signature: this refuses an unknown value, not a
+  forgery.
+- An NRAS token whose JWS header lists `crit` is refused (RFC 7515, 4.1.11;
+  2026-11-05): this verifier understands no extension and read past it. The
+  header is under NVIDIA's signature.
 - A catalog pull and the TD's fetch of a sealed source refuse a redirect from a
   public endpoint to a literal loopback, link-local, private or unspecified
   address or a metadata name, before any connection, and say so (2026-11-05).
@@ -23,14 +44,9 @@ the first non-beta tag will freeze the receipt protocol below.
   counts it (`head_timeouts`, 2026-11-05). There was no limit: hyper drops its
   30 s default when no timer is set. An idle relay connection is closed too;
   the relay opens a new checked one.
-
-## 0.2.0-beta.7 — 2026-11-04
-
-This version's number was set on 2026-10-18, by the entries at the end of
-this section; the others landed until 2026-11-04.
-
-### Security
-
+- The relay compares the bearer token of its local endpoint with `subtle`
+  (2026-11-05). The hand-written comparison compiled without a branch on the
+  data (rustc 1.98.1, opt-level 3), but nothing guaranteed it.
 - x0ne-sdk for wasm32 with `test-anchor` is refused by its build script
   unless `X0NE_SDK_BENCH=1` (2026-11-04). Such a `.wasm` takes the roots a
   policy names (Intel's, Google's, NVIDIA's), the TEST archive key and the
