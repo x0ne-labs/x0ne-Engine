@@ -5,6 +5,10 @@ the first non-beta tag will freeze the receipt protocol below.
 
 ## Unreleased
 
+### Security
+
+- Receipt checks refuse a small-order session key (`verify_strict`); the identity point verified one signature over every body.
+
 ## 0.2.0-beta.7 — 2026-11-04
 
 This version's number was set on 2026-10-18, by the entries at the end of

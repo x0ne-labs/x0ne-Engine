@@ -23,7 +23,7 @@
 //! The SIGNING key never leaves the process and has no serialization; it is
 //! zeroized on drop (`ed25519_dalek::SigningKey` implements ZeroizeOnDrop).
 
-use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use sha2::{Digest, Sha256, Sha512};
 
 const CONTEXT: &[u8] = b"x0ne-infer/v1";
@@ -143,7 +143,11 @@ pub fn verify_receipt_signature(
     body: &[u8],
     signature: &ed25519_dalek::Signature,
 ) -> bool {
-    public_key.verify(&receipt_message(body), signature).is_ok()
+    // SECURITY: `verify` takes a small-order key: the identity point signs every
+    // body (measured 2026-11-05). x0ne-sdk, tlog and openpgp are already strict.
+    public_key
+        .verify_strict(&receipt_message(body), signature)
+        .is_ok()
 }
 
 /// v2, the cloud channel: the quote binds the session key AND the TLS key
@@ -488,5 +492,20 @@ mod tests {
         assert!(!verify_receipt_signature(&id.public_key(), body, &bare));
         // And the domain is what was agreed with the browser verifier.
         assert_eq!(RECEIPT_DOMAIN, b"x0ne-infer/receipt/v1\0");
+    }
+
+    /// SECURITY: a failure means a small-order key verifies one signature
+    /// over every body: the identity point, then (R = identity, s = 0).
+    #[test]
+    fn a_small_order_key_verifies_no_receipt_signature_whatever_the_body() {
+        let mut identity_point = [0u8; 32];
+        identity_point[0] = 1;
+        let key = VerifyingKey::from_bytes(&identity_point).unwrap();
+        let mut forged = [0u8; 64];
+        forged[0] = 1;
+        let forged = ed25519_dalek::Signature::from_bytes(&forged);
+        for body in [&b"one body"[..], &b"another body"[..]] {
+            assert!(!verify_receipt_signature(&key, body, &forged));
+        }
     }
 }

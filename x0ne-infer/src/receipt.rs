@@ -403,6 +403,33 @@ mod tests {
         tampered[last] ^= 0x20;
         assert!(!verify_signed_payload(&tampered, &receipt));
     }
+    /// SECURITY: a failure means anyone forges a receipt offline: the identity
+    /// point as its key, (R = identity, s = 0) as its signature, any content.
+    #[test]
+    fn a_receipt_under_a_small_order_key_is_refused_whatever_it_says() {
+        let id = SessionIdentity::generate([11u8; 32], [13u8; 32]);
+        let Signed { mut receipt, .. } = build_signed(
+            &proof(),
+            &id,
+            [5u8; 32],
+            "abcd",
+            "a prompt",
+            "an output",
+            (2, 2),
+            "cpu",
+            crate::backend::Isolation::NONE_OF_IT,
+            1_000,
+            1_001,
+        )
+        .unwrap();
+        receipt.model_digest_hex = "0".repeat(64);
+        receipt.session_public_key_hex = format!("01{}", "00".repeat(31));
+        receipt.signature_hex = format!("01{}", "00".repeat(63));
+        assert!(!verify_signed(&receipt));
+        let payload = signable_bytes(&receipt).unwrap();
+        assert!(!verify_signed_payload(&payload, &receipt));
+    }
+
     /// 2026-10-28: a receipt signed before the TCB disclosure existed (the
     /// build of that morning, tests/VENDORED.md) still parses, still verifies
     /// over its bytes, and has no `tcb`; one signed with a disclosure
