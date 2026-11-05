@@ -1795,3 +1795,124 @@ async fn no_source_message_carries_userinfo() {
         "https://w.example/m?sig=1"
     );
 }
+
+/// SECURITY (SSRF): the source itself is judged by `check_source_url`; a
+/// source that answers 302 must not lead the TD where that check would not
+/// let it go. Linux routes a connect to 0.0.0.0 to the loopback, so following
+/// this one reaches a service on the TD's own loopback. A failure is a
+/// connection on that service, or a refusal that does not say why.
+#[tokio::test]
+async fn a_redirect_to_a_non_public_address_is_refused_before_any_connection() {
+    use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+    let service = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = service.local_addr().unwrap().port();
+    let reached = Arc::new(AtomicUsize::new(0));
+    let count = reached.clone();
+    tokio::spawn(async move {
+        while service.accept().await.is_ok() {
+            count.fetch_add(1, SeqCst);
+        }
+    });
+    let to = format!("https://0.0.0.0:{port}/latest/meta-data?sig=secret");
+    let app = axum::Router::new().fallback(move || {
+        let to = to.clone();
+        async move { (StatusCode::FOUND, [("location", to)]).into_response() }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::new(dir.path().join("cache"));
+    let source = Source::new(&endpoint).unwrap();
+    let spec = FileSpec {
+        path: "model.sealed".into(),
+        size: 5,
+        sha256: "00".repeat(32),
+    };
+    let url = format!("{endpoint}/model.sealed");
+    let err = fetch_file(&store, &source, "owner:1", &url, &spec, &mut Quiet)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert_eq!(reached.load(SeqCst), 0, "the local service was reached");
+    assert!(err.contains("refused"), "{err}");
+    assert!(err.contains("unspecified"), "{err}");
+    assert!(!err.contains("secret"), "{err}");
+}
+
+/// SECURITY (SSRF): where a redirect may lead, by what the endpoint is. From
+/// a public endpoint (the Hub, a TD's sealed source): https to a host
+/// `check_source_url` would pass. From the loopback (tests, a bench): the
+/// loopback too. From a non-public https endpoint the operator named (a
+/// mirror, which a TD's sealed source cannot be): https anywhere. A failure
+/// is a redirect that reaches a non-public host from a public source.
+#[test]
+fn a_redirect_is_judged_as_the_source_itself() {
+    let url = |s: &str| reqwest::Url::parse(s).unwrap();
+    assert_eq!(Reach::of(DEFAULT_ENDPOINT), Reach::Public);
+    assert_eq!(Reach::of("https://w.example/m.sealed"), Reach::Public);
+    assert_eq!(Reach::of("https://8.8.8.8/m"), Reach::Public);
+    assert_eq!(Reach::of("http://127.0.0.1:9"), Reach::Loopback);
+    assert_eq!(Reach::of("https://10.0.0.5"), Reach::Private);
+    assert_eq!(Reach::of("https://mirror.localhost"), Reach::Private);
+
+    let public = [
+        "https://cdn-lfs.huggingface.co/x?sig=1",
+        "https://8.8.8.8/m",
+        "https://172.32.0.1/m",
+        "https://[2001:4860::1]/m",
+    ];
+    for reach in [Reach::Public, Reach::Loopback, Reach::Private] {
+        for to in public {
+            assert_eq!(redirect_refusal(reach, &url(to)), None, "{reach:?} {to}");
+        }
+    }
+    for (to, why) in [
+        ("https://169.254.169.254/computeMetadata/v1/", "link-local"),
+        ("https://2852039166/m", "link-local"),
+        ("https://[::ffff:169.254.169.254]/m", "link-local"),
+        ("https://[fe80::1]/m", "link-local"),
+        ("https://metadata.google.internal/m", "metadata"),
+        ("https://METADATA.Google.Internal./m", "metadata"),
+        ("https://instance-data/latest/meta-data/", "metadata"),
+        ("https://10.0.0.1/m", "RFC 1918"),
+        ("https://192.168.1.1/m", "RFC 1918"),
+        ("https://[fd00::1]/m", "fc00::/7"),
+        ("https://0.0.0.0:443/m", "unspecified"),
+        ("https://[::]/m", "unspecified"),
+    ] {
+        for reach in [Reach::Public, Reach::Loopback] {
+            let e = redirect_refusal(reach, &url(to)).unwrap_or_else(|| panic!("{reach:?} {to}"));
+            assert!(e.contains("refused") && e.contains(why), "{to}: {e}");
+        }
+        assert_eq!(redirect_refusal(Reach::Private, &url(to)), None, "{to}");
+    }
+    for to in ["https://127.0.0.1/m", "https://[::1]:8443/m", "https://localhost/m"] {
+        let e = redirect_refusal(Reach::Public, &url(to)).expect(to);
+        assert!(e.contains("loopback"), "{to}: {e}");
+        assert_eq!(redirect_refusal(Reach::Loopback, &url(to)), None, "{to}");
+        assert_eq!(redirect_refusal(Reach::Private, &url(to)), None, "{to}");
+    }
+    // Plain http from a loopback endpoint to the loopback, and nothing else.
+    for to in ["http://127.0.0.1:1/m", "http://localhost:1/m", "http://[::1]:1/m"] {
+        assert_eq!(redirect_refusal(Reach::Loopback, &url(to)), None, "{to}");
+        for reach in [Reach::Public, Reach::Private] {
+            assert!(redirect_refusal(reach, &url(to)).is_some(), "{reach:?} {to}");
+        }
+    }
+    for reach in [Reach::Public, Reach::Loopback, Reach::Private] {
+        for to in ["http://w.example/m", "http://10.0.0.1/m", "ftp://w.example/m"] {
+            let e = redirect_refusal(reach, &url(to)).unwrap_or_else(|| panic!("{reach:?} {to}"));
+            assert!(e.contains("non-https"), "{to}: {e}");
+        }
+    }
+    // A refusal names the host, never the target's path, query or userinfo:
+    // a CDN's URL may carry a signature.
+    for to in [
+        "https://10.0.0.1/p?sig=secret",
+        "http://u:secret@w.example/secret?secret",
+    ] {
+        let e = redirect_refusal(Reach::Public, &url(to)).expect(to);
+        assert!(!e.contains("secret"), "{to}: {e}");
+    }
+}

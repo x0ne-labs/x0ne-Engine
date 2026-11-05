@@ -302,7 +302,7 @@ impl FileJob {
         let resp = req
             .send()
             .await
-            .map_err(|e| PullError::Network(format!("{shown}: {}", e.without_url())))?;
+            .map_err(|e| PullError::Network(format!("{shown}: {}", send_failure(e))))?;
         let status = resp.status();
         let start = match status.as_u16() {
             206 if have > 0 => {
@@ -520,6 +520,16 @@ fn write_at(_: &std::fs::File, _: &[u8], _: u64) -> std::io::Result<()> {
     Err(std::io::Error::other("ranged writes need unix"))
 }
 
+/// A request that failed, without its URL. reqwest shows a redirect policy's
+/// refusal only through `source()`: "error following redirect" says no why.
+fn send_failure(e: reqwest::Error) -> String {
+    let e = e.without_url();
+    match std::error::Error::source(&e).filter(|_| e.is_redirect()) {
+        Some(why) => format!("{e}: {why}"),
+        None => e.to_string(),
+    }
+}
+
 /// The catalog URL, and where it redirected to (the Hub sends LFS files to a
 /// CDN): ranges go there directly, one resolve per file and not per range.
 struct Urls {
@@ -614,7 +624,7 @@ impl Piece {
             .header(reqwest::header::RANGE, format!("bytes={start}-{}", end - 1))
             .send()
             .await
-            .map_err(|e| Fail::Retry(format!("{}", e.without_url())))?;
+            .map_err(|e| Fail::Retry(send_failure(e)))?;
         let status = resp.status();
         match status.as_u16() {
             206 => {}

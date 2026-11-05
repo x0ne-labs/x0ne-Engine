@@ -191,7 +191,9 @@ their directory 0750; partial downloads are created 0640.
 Transport: `https://huggingface.co` by default, `X0NE_ENGINE_HF_ENDPOINT` to
 change it. Plain HTTP is refused, except to the loopback (tests, a local
 mirror); redirects (the Hub sends weights to a CDN) are followed only to https,
-at most 10. TLS roots are the ones compiled into `reqwest` (`webpki-roots`).
+at most 10, and from a public endpoint never to a literal loopback, link-local,
+private or unspecified address nor a metadata name (names are not resolved; an
+endpoint you set on such a host keeps its redirects). TLS roots are the ones compiled into `reqwest` (`webpki-roots`).
 Integrity does not rest on the transport: a mirror that serves other bytes is
 refused by step 3.
 

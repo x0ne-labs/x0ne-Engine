@@ -170,7 +170,8 @@ any request (`registry::check_source_url`). Each image may also name
 `rtmr0`: `"gce-endorsed"` requires the verdict to have pinned RTMR0 to
 Google's endorsed firmware and the reference's host events (every verdict
 does since 2026-10-31), 96 hex requires that exact value; absent, RTMR0 is
-the reference's business alone. DNS resolution is not checked: a
+the reference's business alone. A redirect from the source to such a host is
+refused too, before any connection. DNS resolution is not checked: a
 name that resolves to such an address is not refused. No message prints the
 URL's userinfo. `sealed_source` is copied into the
 session config, so it is in every quote, and `x0ne-engine cloud` refuses a relay

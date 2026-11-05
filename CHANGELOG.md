@@ -12,6 +12,12 @@ the first non-beta tag will freeze the receipt protocol below.
 - A TDX quote whose QE report has a non-zero `report_data[32..64]` is refused; Intel's TD QE writes zeros there, and no check read them.
 - A QE identity whose schema version is not 2 is refused by name, as tcbInfo already was for any version but 3.
 - An NRAS token whose JWS header has `crit` is refused (RFC 7515, 4.1.11); this verifier understands no extension and read past it.
+- A catalog pull and the TD's fetch of a sealed source refuse a redirect from a
+  public endpoint to a literal loopback, link-local, private or unspecified
+  address or a metadata name, before any connection, and say so (2026-11-05).
+  Until then only the scheme was checked: a 302 to `https://0.0.0.0:<port>/`
+  reached a service on the machine's own loopback. Names are not resolved, as
+  for the source itself.
 
 ## 0.2.0-beta.7 — 2026-11-04
 

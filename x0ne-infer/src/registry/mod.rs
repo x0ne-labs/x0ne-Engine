@@ -63,8 +63,12 @@ fn is_loopback_http(url: &str) -> bool {
         u.scheme() == "http"
             && u.username().is_empty()
             && u.password().is_none()
-            && matches!(u.host_str(), Some("127.0.0.1" | "[::1]" | "localhost"))
+            && u.host_str().is_some_and(is_loopback_name)
     })
+}
+
+fn is_loopback_name(host: &str) -> bool {
+    matches!(host, "127.0.0.1" | "[::1]" | "localhost")
 }
 
 /// A URL as a message shows it: without its userinfo, which may be a
@@ -141,7 +145,8 @@ fn non_public_host(host: &str) -> Option<&'static str> {
 /// loopback, link-local, private or unspecified address nor a metadata name,
 /// or plain http towards the loopback (tests, a bench), with no userinfo
 /// anywhere (a signed URL carries its token in the query). DNS is not
-/// resolved here: a name that resolves to such an address passes.
+/// resolved here: a name that resolves to such an address passes. A redirect
+/// from such a source is held to the same hosts (`redirect_refusal`).
 pub fn check_source_url(url: &str) -> Result<(), String> {
     let shown = shown_url(url);
     let parsed = reqwest::Url::parse(url).map_err(|e| format!("{shown:?}: {e}; https only"))?;
@@ -167,12 +172,61 @@ pub fn check_source_url(url: &str) -> Result<(), String> {
     ))
 }
 
+/// What an endpoint is, for where its redirects may lead.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reach {
+    /// https to a host [`non_public_host`] passes: the Hub, a TD's sealed source.
+    Public,
+    /// Plain http to the loopback: tests, a bench.
+    Loopback,
+    /// https to a host [`non_public_host`] refuses, named by the operator (a
+    /// mirror); [`check_source_url`] keeps a TD's sealed source from being one.
+    Private,
+}
+
+impl Reach {
+    fn of(endpoint: &str) -> Self {
+        if is_loopback_http(endpoint) {
+            return Self::Loopback;
+        }
+        let url = reqwest::Url::parse(endpoint).ok();
+        match url.as_ref().and_then(reqwest::Url::host_str) {
+            Some(host) if non_public_host(host).is_none() => Self::Public,
+            _ => Self::Private,
+        }
+    }
+}
+
+/// Why a redirect from an endpoint of this `reach` may not go to `to`; None
+/// follows it. SECURITY: a source may not send the TD where [`check_source_url`]
+/// would not let it go; a host of a redirect is judged the same way, names not
+/// resolved. A refusal names the host only: the target's URL may carry a signature.
+fn redirect_refusal(reach: Reach, to: &reqwest::Url) -> Option<String> {
+    let host = to.host_str().unwrap_or_default();
+    if to.scheme() != "https" {
+        if reach == Reach::Loopback && is_loopback_http(to.as_str()) {
+            return None;
+        }
+        let scheme = to.scheme();
+        return Some(format!("redirect to a non-https URL refused: {scheme}://{host}"));
+    }
+    let why = non_public_host(host)?;
+    match reach {
+        Reach::Private => None,
+        Reach::Loopback if is_loopback_name(host) => None,
+        Reach::Public | Reach::Loopback => Some(format!(
+            "redirect to {host} refused: it is {why}; a source leads to a public https host \
+             only (names are not resolved here)"
+        )),
+    }
+}
+
 /// One file by its URL into `store`'s partial area, verified against `spec`
 /// (`size`, `sha256`) as a catalog file is: ranges, resumes and the hash of
 /// the whole, by the same `transfer` code. Returns the verified file's path,
 /// `partial/<sha256>.part`, which a later call finds complete and does not
-/// fetch again. `source` was made from this URL (its https rule applies to
-/// redirects); `name` names the download in messages.
+/// fetch again. `source` was made from this URL (its rule applies to redirects:
+/// `redirect_refusal`); `name` names the download in messages.
 pub async fn fetch_file(
     store: &Store,
     source: &Source,
@@ -198,16 +252,15 @@ impl Source {
                 shown_url(&endpoint)
             ));
         }
-        // Redirects (the Hub sends LFS files to a CDN) must stay on https,
-        // except within a loopback test server.
+        // Redirects: the Hub sends LFS files to a CDN.
+        let reach = Reach::of(&endpoint);
         let policy = reqwest::redirect::Policy::custom(move |attempt| {
-            let url = attempt.url().to_string();
             if attempt.previous().len() >= 10 {
                 attempt.error("more than 10 redirects")
-            } else if url.starts_with("https://") || (loopback && is_loopback_http(&url)) {
-                attempt.follow()
+            } else if let Some(why) = redirect_refusal(reach, attempt.url()) {
+                attempt.error(why)
             } else {
-                attempt.error(format!("redirect to a non-https URL refused: {url}"))
+                attempt.follow()
             }
         });
         let client = reqwest::Client::builder()
