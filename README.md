@@ -1,5 +1,5 @@
 <h1 align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg"><img src="docs/assets/logo-light.svg" alt="x0ne Confidential Engine" width="520"></picture></h1>
-<p align="center"><strong>Confidential AI inference, verified on your machine. Preview.</strong></p>
+<p align="center"><strong>Confidential AI inference. Preview.</strong></p>
 <p align="center">
   <a href="https://github.com/x0ne-labs/x0ne-Engine/actions/workflows/ci.yml"><img src="https://github.com/x0ne-labs/x0ne-Engine/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSING.md"><img src="https://img.shields.io/badge/license-AGPL--3.0%20%7C%20Apache--2.0-blue" alt="License: AGPL-3.0 (server), Apache-2.0 (SDK)"></a>
