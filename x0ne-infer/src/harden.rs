@@ -118,8 +118,8 @@ pub fn is_dumpable() -> bool {
 /// Where a [`SecretBytes`] lives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Backing {
-    /// `memfd_secret(2)`: locked, not dumped, absent from the kernel's
-    /// direct map, not shared with a forked child.
+    /// `memfd_secret(2)`: unevictable, so never swapped; not dumped, absent
+    /// from the kernel's direct map, not shared with a forked child.
     SecretMem,
     /// Anonymous pages: `mlock`, `MADV_DONTDUMP`, `MADV_WIPEONFORK`.
     Locked,
@@ -127,9 +127,10 @@ pub enum Backing {
     Heap,
 }
 
-/// A key in memory that is locked, kept out of core dumps and zeroed on
-/// drop. On Linux it is never on the heap: if neither `memfd_secret` nor
-/// `mlock` works, construction fails.
+/// A key in memory kept out of swap and core dumps, and zeroed on drop. On
+/// Linux it is never on the heap: if neither `memfd_secret` nor `mlock`
+/// works, construction fails; past `RLIMIT_MEMLOCK`, a kernel with Linux
+/// commit 97d34aa65c29 raises SIGBUS at the first write instead.
 pub struct SecretBytes {
     region: Region,
     len: usize,
@@ -326,8 +327,9 @@ mod linux {
                 if p == libc::MAP_FAILED {
                     return Err(last());
                 }
-                // A shared mapping would follow a fork. Over RLIMIT_MEMLOCK
-                // the mmap above fails (EAGAIN, measured 2026-10-13, 6.12).
+                // A shared mapping would follow a fork. Over RLIMIT_MEMLOCK the mmap above
+                // fails (EAGAIN, 2026-10-13, 6.12); since 97d34aa65c29 it succeeds and the
+                // first write past the user's limit raises SIGBUS (2026-11-05, 6.12.115).
                 if libc::madvise(p, map_len, libc::MADV_DONTFORK) != 0 {
                     let e = last();
                     libc::munmap(p, map_len);
@@ -498,22 +500,104 @@ mod tests {
             .collect()
     }
 
-    /// Linux: locked, out of core dumps, not inherited by a fork; in
+    /// `Unevictable` of `/proc/meminfo`, in kB: pages reclaim never takes,
+    /// so never swapped (`mlock`ed, or of an unevictable mapping).
+    #[cfg(target_os = "linux")]
+    fn unevictable_kb() -> u64 {
+        std::fs::read_to_string("/proc/meminfo")
+            .unwrap()
+            .lines()
+            .find_map(|l| l.strip_prefix("Unevictable:"))
+            .and_then(|v| v.trim().strip_suffix("kB"))
+            .and_then(|v| v.trim().parse().ok())
+            .expect("Unevictable in /proc/meminfo")
+    }
+
+    /// kB of `Unevictable` gained once `region` is written from /dev/zero,
+    /// read until it reaches the region or 2 s pass: the counter is machine
+    /// wide, and per-CPU counts reach it up to a second late.
+    #[cfg(target_os = "linux")]
+    fn unevictable_gain(region: &mut [u8]) -> u64 {
+        use std::io::Read;
+        let want = (region.len() / 1024) as u64;
+        let before = unevictable_kb();
+        // A kernel copy: past the limit a fault is EFAULT here, SIGBUS in user code.
+        let mut zero = std::fs::File::open("/dev/zero").unwrap();
+        zero.read_exact(region).expect("fault the region in");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let gain = unevictable_kb().saturating_sub(before);
+            if gain >= want || std::time::Instant::now() >= deadline {
+                return gain;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+
+    /// (region, its gain, the control's gain) in kB: `memfd_secret` pages
+    /// against as many ordinary anonymous ones. `None` when RLIMIT_MEMLOCK,
+    /// which bounds `memfd_secret` memory, leaves no room for 1 MiB.
+    #[cfg(target_os = "linux")]
+    fn secretmem_and_ordinary_gains() -> Option<(u64, u64, u64)> {
+        let mut lim = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        // SAFETY: `lim` outlives the call; getrlimit only writes it.
+        let got = unsafe { libc::getrlimit(libc::RLIMIT_MEMLOCK, &mut lim) };
+        assert_eq!(got, 0);
+        // Half the limit at most: the rest stays for the other tests' keys.
+        let half = usize::try_from(lim.rlim_cur / 2).unwrap_or(usize::MAX);
+        let len = half.min(4 << 20) & !0xfffff;
+        if len == 0 {
+            return None;
+        }
+        // SAFETY: a private anonymous mapping, written through the slice
+        // below while it lives, unmapped here.
+        let control = unsafe {
+            let p = libc::mmap(
+                std::ptr::null_mut(),
+                len,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            );
+            assert_ne!(p, libc::MAP_FAILED);
+            let gain = unevictable_gain(std::slice::from_raw_parts_mut(p.cast::<u8>(), len));
+            libc::munmap(p, len);
+            gain
+        };
+        let mut s = SecretBytes::with_backing(len, Backing::SecretMem).expect("memfd_secret");
+        let secret = unevictable_gain(s.expose_mut());
+        Some(((len / 1024) as u64, secret, control))
+    }
+
+    /// Linux: out of swap and core dumps, not inherited by a fork; in
     /// `memfd_secret` memory where the kernel offers it.
     #[cfg(target_os = "linux")]
     #[test]
-    fn on_linux_the_secret_is_locked_undumped_and_not_inherited() {
+    fn on_linux_the_secret_is_unevictable_undumped_and_not_inherited() {
         let s = SecretBytes::from_slice(&[1; 32]).unwrap();
         let block = vma_of(s.expose().as_ptr() as usize);
         let flags = vm_flags(&block);
         let has = |f: &str| flags.iter().any(|x| x == f);
-        assert!(has("lo") && has("dd"), "{:?}: {block}", s.backing());
+        assert!(has("dd"), "{:?}: {block}", s.backing());
         match s.backing() {
             Backing::SecretMem => {
                 assert!(block.contains("secretmem"), "{block}");
                 assert!(has("dc"), "{block}");
+                // No VM_LOCKED ("lo") since 97d34aa65c29 (6.12.115, 2026-11-05): the
+                // pages stay unevictable, which is what keeps them out of swap.
+                match secretmem_and_ordinary_gains() {
+                    Some((len, secret, control)) => {
+                        assert!(control < len / 4, "control: {control} of {len} kB");
+                        assert!(secret >= len * 3 / 4, "{secret} of {len} kB: {block}");
+                    }
+                    None => assert!(has("lo"), "no room to measure, no VM_LOCKED: {block}"),
+                }
             }
-            Backing::Locked => assert!(has("wf"), "{block}"),
+            Backing::Locked => assert!(has("lo") && has("wf"), "{block}"),
             Backing::Heap => panic!("Linux must not fall back to the heap"),
         }
         let locked = SecretBytes::with_backing(32, Backing::Locked).unwrap();

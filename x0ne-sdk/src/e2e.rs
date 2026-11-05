@@ -599,7 +599,8 @@ impl Gateway {
     }
 
     /// [`Self::from_seed`], the private scalar moved into the memory `store`
-    /// returns (the TD's locked memory); the derived copy is wiped.
+    /// returns (the TD's `memfd_secret` or `mlock`ed memory); the derived
+    /// copy is wiped.
     ///
     /// # Errors
     /// `store`'s.

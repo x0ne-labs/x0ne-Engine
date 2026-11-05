@@ -59,7 +59,7 @@ pub struct E2e {
     pub counts: Counts,
 }
 
-/// The gateway key's scalar in locked memory, as the model key's recipient
+/// The gateway key's scalar in `harden::SecretBytes`, as the model key's recipient
 /// key (`model_key::Recipient`): `memfd_secret`, else `mlock`.
 struct Locked(crate::harden::SecretBytes);
 
@@ -78,13 +78,14 @@ pub enum Refusal {
 
 impl E2e {
     /// The gateway whose key `seed` derives (RFC 9180 `DeriveKeyPair`), its
-    /// private scalar in locked memory, out of core dumps, wiped on drop. Its
+    /// private scalar in `harden::SecretBytes`, out of swap and core dumps,
+    /// wiped on drop. Its
     /// key documents name `boot`, this boot's binding, and carry
     /// `session_config`, the exact bytes whose SHA-256 `boot` names.
     ///
     /// # Errors
-    /// `session_config` is not the config `boot` names; no locked memory:
-    /// neither `memfd_secret` nor `mlock` (Linux).
+    /// `session_config` is not the config `boot` names; neither
+    /// `memfd_secret` nor `mlock` works (Linux).
     pub fn from_seed(
         seed: &[u8; 32],
         boot: crate::binding::BindingV2,

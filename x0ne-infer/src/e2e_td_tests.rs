@@ -1713,9 +1713,9 @@ async fn key_documents_that_empty_their_bucket_leave_v1_sessions_open() {
 }
 
 /// SECURITY: the gateway's private scalar is in
-/// locked memory, as the model key's recipient key; on Linux, never the heap.
+/// `harden::SecretBytes`, as the model key's recipient key; on Linux, never the heap.
 #[test]
-fn the_gateway_key_is_in_locked_memory() {
+fn the_gateway_key_is_in_secret_bytes() {
     let config = CloudConfig::new(MODEL, [1; 32], [2; 32], now() + 3600, "cpu", 443, 64)
         .to_loaded()
         .unwrap();
@@ -1725,7 +1725,7 @@ fn the_gateway_key_is_in_locked_memory() {
         config.sha256,
     );
     let e2e = crate::e2e_gateway::E2e::from_seed(&test_random(), boot, &config.bytes)
-        .expect("locked memory");
+        .expect("SecretBytes");
     if cfg!(target_os = "linux") {
         assert_ne!(e2e.key_backing(), crate::harden::Backing::Heap);
     }

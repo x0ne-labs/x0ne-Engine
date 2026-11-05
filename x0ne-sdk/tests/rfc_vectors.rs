@@ -327,7 +327,8 @@ impl hpke::SecretScalar for Held {
     }
 }
 
-/// A key moved into memory the caller holds (the TD's locked memory) is the
+/// A key moved into memory the caller holds (the TD's `memfd_secret` or
+/// `mlock`ed memory) is the
 /// same key: its public key, what it opens. Memory that gives back another
 /// length fails the operation, without a panic.
 #[test]

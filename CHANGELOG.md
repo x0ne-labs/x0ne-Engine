@@ -125,6 +125,18 @@ history: candle has been the CPU reference of the tests since 2026-11-04.
 
 ### Changes, newest first
 
+- The `memfd_secret` test checks that the pages stay out of swap, not that
+  they are `mlock`ed (2026-11-05). Linux commit 97d34aa65c29 (stable
+  6.12.113, CVE-2026-93243) no longer marks a `memfd_secret` mapping
+  `VM_LOCKED`; its pages stay unevictable. The test writes up to 4 MiB of
+  `memfd_secret` memory and as much ordinary memory, and requires
+  `Unevictable` in `/proc/meminfo` to grow by three quarters of the first
+  at least and by less than a quarter of the second. It passes on 6.12.111
+  and 6.12.115, and fails when the region is an ordinary memfd. The same
+  commit counts these pages against the user's `RLIMIT_MEMLOCK` when they are
+  first written: past it, `SecretBytes` gets SIGBUS at the first write,
+  where its construction failed with an error before (the TD exited 97).
+  The docs no longer call this memory locked.
 - x0ne Core is the served engine (2026-11-04). With the `cuda` feature, the
   attested server runs the model on x0ne Core, written for this project in
   Rust and CUDA: its kernels compiled ahead of time, one arena reserved at

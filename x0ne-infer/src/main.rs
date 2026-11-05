@@ -1005,7 +1005,7 @@ async fn run_cloud(
     let binding =
         x0ne_infer::binding::BindingV2::of(&identity, tls_identity.spki_sha256(), loaded.sha256);
     // The OHTTP key of `/v2/e2e/*`, drawn per boot: its seed read into memory
-    // wiped on drop, its scalar in locked memory, as the recipient's. Its key
+    // wiped on drop, its scalar in `SecretBytes`, as the recipient's. Its key
     // documents name this boot's binding and carry the config's bytes.
     let e2e = {
         let mut seed = zeroize::Zeroizing::new([0u8; 32]);

@@ -20,7 +20,7 @@ path.
 | party | holds | never holds |
 |---|---|---|
 | model owner, on their machine (`x0ne-engine cloud up\|run --model-key --key-policy`, which passes both to `x0ne-engine-proxy`) | the 32-byte model key (file mode 0600), the release policy, the sealed file at the URL the policy names | the TD's X25519 private key |
-| the TD (`x0ne-infer --cloud-config …`, the sealed file fetched from the policy's `sealed_source`, or given as `--sealed-weights`) | the sealed file; an X25519 key pair born at boot, in locked memory; after the release, the model key and the plaintext weights in TDX-protected memory | the model key before the release |
+| the TD (`x0ne-infer --cloud-config …`, the sealed file fetched from the policy's `sealed_source`, or given as `--sealed-weights`) | the sealed file; an X25519 key pair born at boot, in `memfd_secret` or `mlock`ed memory; after the release, the model key and the plaintext weights in TDX-protected memory | the model key before the release |
 | the host, the cloud, x0ne | the sealed file, its URL and size, the public config and tokenizer of the base model, the HPKE ciphertext | the model key, the plaintext weights |
 
 The relay and the model owner are the same machine. The owner who serves

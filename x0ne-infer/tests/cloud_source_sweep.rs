@@ -741,7 +741,7 @@ fn the_td_side_has_no_development_fallback() {
     // SECURITY: the sealed chat is the attested chat handler, with its
     // padding, cadence and receipts, its panics contained: no other
     // answer path, no `chat_as` that unwinds.
-    // SECURITY: the gateway's private scalar lives in locked memory, as the
+    // SECURITY: the gateway's private scalar lives in `SecretBytes`, as the
     // model key's recipient key; its seed is read into memory wiped on drop.
     assert!(
         gateway.contains("Gateway::from_seed_held_by(seed, ")

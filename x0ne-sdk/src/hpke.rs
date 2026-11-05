@@ -49,7 +49,8 @@ pub enum HpkeError {
 }
 
 /// Memory that holds a private scalar in place of this crate's own zeroed
-/// array: the TD keeps its gateway key in locked memory (`memfd_secret`).
+/// array: the TD keeps its gateway key in `memfd_secret` memory, else
+/// `mlock`ed.
 pub trait SecretScalar: Send + Sync {
     /// The scalar's bytes, read for one X25519 operation: 32 of them.
     fn expose(&self) -> &[u8];

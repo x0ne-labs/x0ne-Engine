@@ -460,9 +460,11 @@ above left open, each the stricter of two and each reversible:
 - **The key** is derived per boot from 32 bytes of `/dev/urandom`, read into
   memory wiped on drop. Its private scalar is held as the model key's
   recipient key is: `memfd_secret`, else `mlock`, out of core dumps, wiped
-  on drop (`harden::SecretBytes`); without locked memory the TD exits 97.
-  Deriving it and each X25519 operation pass the scalar by value, which
-  leaves stack copies that are not zeroed. The receipt key is the session
+  on drop (`harden::SecretBytes`); if neither works the TD exits 97, and past
+  `RLIMIT_MEMLOCK` a kernel with Linux commit 97d34aa65c29 kills it with
+  SIGBUS at the first write instead. Deriving it and each X25519 operation
+  pass the scalar by value, which leaves stack copies that are not zeroed.
+  The receipt key is the session
   key the boot binding names.
 - **The chat** opens the request (`Gateway::open`), admits it once
   (`ReplayGuard`), and hands its JSON to the attested chat handler

@@ -25,8 +25,8 @@
 //!                                                            unseal; served digest = the grant's (77)
 //! ```
 //!
-//! `kem_sk` is born in the TD at boot, lives in locked memory
-//! (`harden::SecretBytes`) and is dropped once a key opened: a wrapped key
+//! `kem_sk` is born in the TD at boot, lives in `harden::SecretBytes`
+//! and is dropped once a key opened: a wrapped key
 //! recorded on the way opens nowhere afterwards. The quote names `kem_pk`
 //! directly, as Trustee's KBS protocol binds its `tee-pubkey`; the HPKE suite
 //! is the one Azure's transparent KMS and Tinfoil's EHBP use.
@@ -272,8 +272,8 @@ impl Grant {
 
 // ── The TD's half ────────────────────────────────────────────────────────────
 
-/// The X25519 key the recipient quote names. The private half is in locked
-/// memory and never leaves this value.
+/// The X25519 key the recipient quote names. The private half is in
+/// `SecretBytes` and never leaves this value.
 pub struct Recipient {
     sk: SecretBytes,
     pk: [u8; 32],

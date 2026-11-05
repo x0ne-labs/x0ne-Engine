@@ -20,7 +20,7 @@ pub struct ClientKeyBroker {
 }
 
 impl ClientKeyBroker {
-    /// Moves the key into locked memory (`harden::SecretBytes`); the
+    /// Moves the key into `harden::SecretBytes`; the
     /// caller's copy is zeroed on return.
     pub fn new(material: Zeroizing<Vec<u8>>) -> Result<Self, String> {
         Self::for_id(material, KEY_ID)

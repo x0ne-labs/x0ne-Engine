@@ -95,7 +95,7 @@ pub mod fsread;
 pub mod gate;
 /// Google launch endorsements: the MRTD signed by Google.
 pub mod gce_endorsement;
-/// The TD process: not dumpable, no core file; keys in locked memory.
+/// The TD process: not dumpable, no core file; keys out of swap and dumps.
 pub mod harden;
 /// Hex decoding of untrusted input, re-exported by `cloud_config`.
 mod hex;
