@@ -3364,7 +3364,7 @@ fn head_limits(head_timeout: Duration) -> cloud_serve::HandshakeLimits {
 async fn a_request_head_left_unfinished_is_closed_at_its_timeout() {
     assert_eq!(
         cloud_serve::HandshakeLimits::default().head_timeout,
-        Duration::from_secs(3660)
+        Duration::from_mins(61)
     );
     let lab = Lab::new().await;
     let limits = head_limits(Duration::from_millis(800));
@@ -3471,7 +3471,7 @@ async fn measure_a_request_racing_the_close_of_an_idle_connection() {
     const N: u32 = 1000;
     for i in 0..N {
         let _ = client.ready().await;
-        let gap = t - Duration::from_millis(1) + Duration::from_micros(u64::from(i % 40) * 100);
+        let gap = Duration::from_micros(99_000 + u64::from(i % 40) * 100);
         tokio::time::sleep(gap).await;
         if let Err(e) = client.ready().await {
             failed += 1;
