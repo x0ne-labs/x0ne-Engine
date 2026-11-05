@@ -141,13 +141,14 @@ jobs:
         run: |
           sudo sysctl kernel.apparmor_restrict_unprivileged_userns
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      # `--all-targets` skips doctests: first step.
+      # `--all-targets` skips doctests: first step. On 2026-11-05 one red test
+      # binary hid the rest for a run; --no-fail-fast shows every red at once.
       - name: test (doctests and default features)
-        run: cargo test --locked --workspace
+        run: cargo test --locked --workspace --no-fail-fast
       - name: test (all targets)
-        run: cargo test --locked --workspace --all-targets
+        run: cargo test --locked --workspace --all-targets --no-fail-fast
       - name: test (nvml)
-        run: cargo test --locked --workspace --all-targets --features x0ne-infer/nvml
+        run: cargo test --locked --workspace --all-targets --features x0ne-infer/nvml --no-fail-fast
       # The client build of docs/cloud.md (ci/inside.sh, step build-cloud).
       - name: build (cloud client, release)
         run: |
