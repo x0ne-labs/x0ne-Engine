@@ -15,6 +15,9 @@ use x0ne_infer::cloud_config::CloudConfig;
 
 const BIN: &str = env!("CARGO_BIN_EXE_x0ne-infer");
 
+#[path = "support/evidence_host.rs"]
+mod evidence_host;
+
 /// A TCP acceptor that counts every connection and answers nothing useful.
 fn counting_catalog() -> (String, Arc<AtomicUsize>, TcpListener) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -36,13 +39,13 @@ fn counting_catalog() -> (String, Arc<AtomicUsize>, TcpListener) {
 }
 
 fn on_a_td() -> bool {
-    std::path::Path::new("/sys/kernel/config/tsm/report").exists()
+    evidence_host::may_collect_evidence()
 }
 
 #[test]
 fn off_a_td_cloud_mode_exits_64_before_any_catalog_connection() {
     if on_a_td() {
-        eprintln!("skipped: this host exposes configfs-tsm, the 64 path does not apply");
+        eprintln!("skipped: configfs-tsm is writable here, the 64 path does not apply");
         return;
     }
     let (endpoint, hits, _keep) = counting_catalog();

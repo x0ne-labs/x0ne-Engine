@@ -13,8 +13,11 @@ use x0ne_infer::cloud_config::{hex, sha256, CloudConfig, SealedSource, SealedWei
 
 const BIN: &str = env!("CARGO_BIN_EXE_x0ne-infer");
 
+#[path = "support/evidence_host.rs"]
+mod evidence_host;
+
 fn on_a_td() -> bool {
-    std::path::Path::new("/sys/kernel/config/tsm/report").exists()
+    evidence_host::may_collect_evidence()
 }
 
 fn now() -> u64 {
@@ -132,7 +135,7 @@ fn counting_source() -> (u16, Arc<AtomicUsize>, TcpListener) {
 #[test]
 fn a_sealed_source_is_fetched_after_the_evidence_not_before() {
     if on_a_td() {
-        eprintln!("skipped: this host exposes configfs-tsm, the 64 path does not apply");
+        eprintln!("skipped: configfs-tsm is writable here, the 64 path does not apply");
         return;
     }
     let (port, hits, _keep) = counting_source();
@@ -198,7 +201,7 @@ fn a_sealed_source_is_fetched_after_the_evidence_not_before() {
 #[test]
 fn a_sealed_config_checks_its_file_before_any_evidence() {
     if on_a_td() {
-        eprintln!("skipped: this host exposes configfs-tsm, the 64 path does not apply");
+        eprintln!("skipped: configfs-tsm is writable here, the 64 path does not apply");
         return;
     }
     let dir = tempfile::tempdir().unwrap();

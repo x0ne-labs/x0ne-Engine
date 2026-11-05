@@ -26,8 +26,11 @@ fn infer(args: &[&str]) -> (Option<i32>, String) {
     )
 }
 
+#[path = "support/evidence_host.rs"]
+mod evidence_host;
+
 fn confidential_machine() -> bool {
-    Path::new("/sys/kernel/config/tsm").exists()
+    evidence_host::may_collect_evidence()
 }
 
 /// SECURITY: a missing or malformed file must never become "nothing pinned".
