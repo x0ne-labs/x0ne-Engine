@@ -405,7 +405,8 @@ pub fn verify_tdx_chain(
         return Err(PcsRejected::AttestationKeyBinding);
     }
     // SECURITY: Intel's TD QE zeroes these bytes (DCAP 72f800e, quoting_enclave_tdqe.cpp:851,
-    // 986). go-tdx-guest requires it, Intel's QVL does not (2026-11-05); no real quote differs.
+    // 986). go-tdx-guest requires it, Intel's QVL does not. 9 distinct real quotes read on
+    // 2026-11-05 have zeros.
     if report_data[32..] != [0u8; 32] {
         return Err(PcsRejected::QeReportDataTail);
     }
