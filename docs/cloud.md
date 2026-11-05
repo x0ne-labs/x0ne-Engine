@@ -313,6 +313,14 @@ carrier-grade NAT (`100.64.0.0/10`), multicast or reserved one is refused.
 No answer within 3 s, twice, or a refused one, is exit 91 before the quote:
 nothing is created, and nothing falls back to `0.0.0.0/0`.
 
+Nothing authenticates that answer: it is plain DNS over UDP. Someone who
+cannot see the query must forge the server's address, a random 16-bit id and
+an ephemeral source port within 3 s. Someone on the path answers as the server
+does, with any public address: the `Firewall:` line prints it, the rule admits
+it, and the relay's own connections then come from an address the rule does
+not name. The rule narrows who can reach the TD's handshake; mutual TLS and
+the attestation do not depend on it. `--allow-from` asks nobody.
+
 `--allow-from <CIDR>`, repeatable, names the sources instead, and nothing is
 asked. Give the range your network's outgoing address moves in (a
 carrier-grade NAT with a pool, several uplinks, a VPN you turn on and off),

@@ -6,6 +6,10 @@
 //! Google does not document this name; on 2026-10-30 its answer equalled the
 //! address an HTTPS echo service saw from the same machine. When it fails,
 //! `--allow-from` names the rule's sources instead.
+//!
+//! Nothing authenticates the answer. A socket connected to the server, a random
+//! id and an ephemeral source port keep out who cannot see the query; someone
+//! on the path answers as the server does (docs/cloud.md, "The firewall rule").
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
@@ -339,6 +343,30 @@ mod tests {
             assert_eq!(&b[2..n], &query(id)[2..]);
             let stale = answer(id ^ 0xffff, 0x8400, &[b"192.0.2.1"]);
             srv.send_to(&stale, from).await.unwrap();
+            let ok = answer(id, 0x8400, &[b"198.51.100.23"]);
+            srv.send_to(&ok, from).await.unwrap();
+        });
+        assert_eq!(
+            public_ipv4(&at, Duration::from_secs(5)).await,
+            Ok(Ipv4Addr::new(198, 51, 100, 23))
+        );
+    }
+
+    /// SECURITY: an answer from another address than the server's, its id
+    /// right, is not read: the socket is connected. A failure is a rule that
+    /// names an address anyone could send without forging the server's.
+    #[tokio::test]
+    async fn an_answer_from_another_address_is_not_read() {
+        let srv = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let other = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let at = srv.local_addr().unwrap().to_string();
+        tokio::spawn(async move {
+            let mut b = [0u8; 512];
+            let (_, from) = srv.recv_from(&mut b).await.unwrap();
+            let id = u16::from_be_bytes([b[0], b[1]]);
+            let forged = answer(id, 0x8400, &[b"198.51.100.66"]);
+            other.send_to(&forged, from).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
             let ok = answer(id, 0x8400, &[b"198.51.100.23"]);
             srv.send_to(&ok, from).await.unwrap();
         });
