@@ -2602,14 +2602,22 @@ async fn raw_conn_at(endpoint: &str, relay_tls: &TlsIdentity) -> Send1 {
     conn_over(tcp, relay_tls).await
 }
 
-/// [`raw_conn`] over a TCP connection already open.
-async fn conn_over(tcp: tokio::net::TcpStream, relay_tls: &TlsIdentity) -> Send1 {
+/// The relay's TLS over a TCP connection already open.
+async fn tls_over(
+    tcp: tokio::net::TcpStream,
+    relay_tls: &TlsIdentity,
+) -> tokio_rustls::client::TlsStream<tokio::net::TcpStream> {
     let cfg = crate::tls::client_config(relay_tls, crate::tls::ServerPin::new()).unwrap();
     let name = rustls::pki_types::ServerName::try_from("127.0.0.1").unwrap();
-    let tls = tokio_rustls::TlsConnector::from(Arc::new(cfg))
+    tokio_rustls::TlsConnector::from(Arc::new(cfg))
         .connect(name, tcp)
         .await
-        .unwrap();
+        .unwrap()
+}
+
+/// [`raw_conn`] over a TCP connection already open.
+async fn conn_over(tcp: tokio::net::TcpStream, relay_tls: &TlsIdentity) -> Send1 {
+    let tls = tls_over(tcp, relay_tls).await;
     let (send, conn) = hyper::client::conn::http1::handshake(hyper_util::rt::TokioIo::new(tls))
         .await
         .unwrap();
@@ -3204,7 +3212,10 @@ async fn connect_from(from: &str, endpoint: &str) -> tokio::net::TcpStream {
 }
 
 /// Whether the TD closed `s` (end of stream or reset) by `deadline`.
-async fn closed_by(s: &mut tokio::net::TcpStream, deadline: tokio::time::Instant) -> bool {
+async fn closed_by(
+    s: &mut (impl tokio::io::AsyncRead + Unpin),
+    deadline: tokio::time::Instant,
+) -> bool {
     let mut b = [0u8; 1];
     let end = tokio::time::timeout_at(deadline, s.read(&mut b)).await;
     matches!(end, Ok(Ok(0) | Err(_)))
@@ -3262,6 +3273,7 @@ async fn n_plus_one_silent_handshakes_leave_the_relay_served() {
     let limits = cloud_serve::HandshakeLimits {
         timeout: Duration::from_secs(3),
         max_in_flight: N,
+        ..cloud_serve::HandshakeLimits::default()
     };
     let (td, relay_tls) = shaking_td(&lab, limits).await;
     let st = &td.state.stats;
@@ -3309,6 +3321,7 @@ async fn a_flood_from_one_address_never_drops_another_address_handshake() {
     let limits = cloud_serve::HandshakeLimits {
         timeout: Duration::from_secs(5),
         max_in_flight: N,
+        ..cloud_serve::HandshakeLimits::default()
     };
     let (td, relay_tls) = shaking_td(&lab, limits).await;
     let st = &td.state.stats;
@@ -3333,6 +3346,208 @@ async fn a_flood_from_one_address_never_drops_another_address_handshake() {
     assert_eq!(st.handshakes.load(SeqCst), 1);
     assert_eq!(st.handshakes_dropped.load(SeqCst), (2 * N + 1) as u64);
     drop(flood);
+}
+
+/// Handshake limits with this head timeout.
+fn head_limits(head_timeout: Duration) -> cloud_serve::HandshakeLimits {
+    cloud_serve::HandshakeLimits {
+        head_timeout,
+        ..cloud_serve::HandshakeLimits::default()
+    }
+}
+
+/// SECURITY (slow head): the holder of the relay's key, or a relay gone wrong,
+/// sends part of a request head and a byte now and then. Mutual TLS let it in
+/// and nothing else bounds it: a failure is a connection and its task held for
+/// as long as the peer likes. The production value is pinned.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_request_head_left_unfinished_is_closed_at_its_timeout() {
+    assert_eq!(
+        cloud_serve::HandshakeLimits::default().head_timeout,
+        Duration::from_secs(3660)
+    );
+    let lab = Lab::new().await;
+    let limits = head_limits(Duration::from_millis(800));
+    let (td, relay_tls) = shaking_td(&lab, limits).await;
+    let tcp = tokio::net::TcpStream::connect(&td.endpoint).await.unwrap();
+    let mut tls = tls_over(tcp, &relay_tls).await;
+    let t = tokio::time::Instant::now();
+    tls.write_all(b"GET /v2/ready HTTP/1.1\r\nHost: td\r\nX-Slow: ")
+        .await
+        .unwrap();
+    tls.flush().await.unwrap();
+    // Bytes keep coming: the deadline is the head's, not the last read's.
+    for _ in 0..3 {
+        tokio::time::sleep(limits.head_timeout / 4).await;
+        tls.write_all(b"a").await.unwrap();
+        tls.flush().await.unwrap();
+    }
+    assert!(
+        closed_by(&mut tls, t + limits.head_timeout * 6).await,
+        "still open"
+    );
+    assert!(
+        t.elapsed() >= limits.head_timeout,
+        "closed early: {:?}",
+        t.elapsed()
+    );
+    let st = &td.state.stats;
+    eventually("the timeout counted", || st.head_timeouts.load(SeqCst) == 1).await;
+    assert_eq!(st.handshakes.load(SeqCst), 1);
+}
+
+/// A connection the relay keeps idle past the head timeout is closed by the
+/// TD; the relay sees it, opens and checks a new one, and its session goes on.
+/// A failure is a session lost, or an idle connection held for ever.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_connection_idle_past_the_head_timeout_closes_and_the_session_goes_on() {
+    let lab = Lab::new().await;
+    let limits = head_limits(Duration::from_secs(1));
+    let relay_tls = TlsIdentity::generate("relay").unwrap();
+    let opts = TdOpts {
+        handshake_limits: Some(limits),
+        ..TdOpts::default()
+    };
+    let (td, client, config) = honest_session(&lab, &relay_tls, opts).await;
+    let doc = client.attestation().await.unwrap();
+    let reference = lab.reference();
+    let catalog = crate::registry::Catalog::embedded();
+    let exp = crate::remote_verify::Expectations {
+        config: &config,
+        tls_spki_sha256: client.pinned_spki().unwrap(),
+        machine_type: MACHINE,
+        reference: &reference,
+        catalog_entry: catalog.get(MODEL).unwrap(),
+    };
+    let anchors = lab.anchors();
+    let check =
+        crate::remote_verify::SessionCheck::new(&doc, &exp, &anchors, Arc::new(now)).unwrap();
+    client.establish(check).await.unwrap();
+    assert_eq!(client.ready().await.unwrap().state, "attested");
+    let st = &td.state.stats;
+    let (handshakes, quotes) = (st.handshakes.load(SeqCst), st.session_quotes.load(SeqCst));
+    tokio::time::sleep(limits.head_timeout * 3).await;
+    assert_eq!(client.ready().await.unwrap().state, "attested");
+    assert_eq!(st.handshakes.load(SeqCst), handshakes + 1);
+    assert_eq!(st.session_quotes.load(SeqCst), quotes + 1);
+    assert!(st.head_timeouts.load(SeqCst) >= 1);
+    assert!(client.refusal().is_none());
+}
+
+/// Measure, `--ignored --nocapture`: a request leaving as its idle connection closes, which
+/// loses a session (`local_api::unreachable_td`). 2026-11-05, loopback, debug, timeout 100 ms,
+/// gap 99 to 102.9 ms: 287 of 1000 failed, `GET /v2/ready: connection error`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "a measure"]
+async fn measure_a_request_racing_the_close_of_an_idle_connection() {
+    let lab = Lab::new().await;
+    let t = Duration::from_millis(100);
+    let relay_tls = TlsIdentity::generate("relay").unwrap();
+    let opts = TdOpts {
+        handshake_limits: Some(head_limits(t)),
+        quote_limits: Some(cloud_serve::QuoteLimits {
+            burst: u32::MAX,
+            refill_every: Duration::from_millis(1),
+            ..cloud_serve::QuoteLimits::for_queue(8)
+        }),
+        ..TdOpts::default()
+    };
+    let (_td, client, config) = honest_session(&lab, &relay_tls, opts).await;
+    let doc = client.attestation().await.unwrap();
+    let reference = lab.reference();
+    let catalog = crate::registry::Catalog::embedded();
+    let exp = crate::remote_verify::Expectations {
+        config: &config,
+        tls_spki_sha256: client.pinned_spki().unwrap(),
+        machine_type: MACHINE,
+        reference: &reference,
+        catalog_entry: catalog.get(MODEL).unwrap(),
+    };
+    let anchors = lab.anchors();
+    let check =
+        crate::remote_verify::SessionCheck::new(&doc, &exp, &anchors, Arc::new(now)).unwrap();
+    client.establish(check).await.unwrap();
+    let (mut failed, mut first) = (0, None);
+    const N: u32 = 1000;
+    for i in 0..N {
+        let _ = client.ready().await;
+        let gap = t - Duration::from_millis(1) + Duration::from_micros(u64::from(i % 40) * 100);
+        tokio::time::sleep(gap).await;
+        if let Err(e) = client.ready().await {
+            failed += 1;
+            first.get_or_insert(e);
+        }
+    }
+    println!("{failed} of {N} requests failed at the close; the first: {first:?}");
+}
+
+/// A body that sends one chunk per `every`, `left` times.
+struct Paced {
+    left: u32,
+    every: Duration,
+    sleep: std::pin::Pin<Box<tokio::time::Sleep>>,
+}
+
+impl hyper::body::Body for Paced {
+    type Data = hyper::body::Bytes;
+    type Error = std::convert::Infallible;
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<hyper::body::Frame<Self::Data>, Self::Error>>> {
+        use std::future::Future as _;
+        if self.left == 0 {
+            return std::task::Poll::Ready(None);
+        }
+        std::task::ready!(self.sleep.as_mut().poll(cx));
+        self.left -= 1;
+        let next = tokio::time::Instant::now() + self.every;
+        self.sleep.as_mut().reset(next);
+        let chunk = hyper::body::Bytes::from_static(b"x");
+        std::task::Poll::Ready(Some(Ok(hyper::body::Frame::data(chunk))))
+    }
+}
+
+/// The timeout bounds a request's head and nothing after it: an answer slow to
+/// start and slow to send, 15 minutes for a stream, is not cut, and its
+/// connection carries the next request. A failure is a stream cut short.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_answer_longer_than_the_head_timeout_is_not_cut() {
+    let lab = Lab::new().await;
+    let t = Duration::from_millis(500);
+    let relay_tls = TlsIdentity::generate("relay").unwrap();
+    let slow = move || async move {
+        tokio::time::sleep(t * 2).await;
+        axum::body::Body::new(Paced {
+            left: 4,
+            every: t,
+            sleep: Box::pin(tokio::time::sleep(t)),
+        })
+    };
+    let opts = TdOpts {
+        handshake_limits: Some(head_limits(t)),
+        wrap_app: Some(Box::new(move |app: axum::Router| {
+            app.route("/slow", axum::routing::get(slow))
+        })),
+        ..TdOpts::default()
+    };
+    let (td, _client, _config) = honest_session(&lab, &relay_tls, opts).await;
+    let mut c = raw_conn(&td, &relay_tls).await;
+    let started = tokio::time::Instant::now();
+    let req = axum::http::Request::get("/slow")
+        .header(axum::http::header::HOST, "td")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    c.ready().await.unwrap();
+    let resp = c.send_request(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let bytes = axum::body::to_bytes(axum::body::Body::new(resp.into_body()), 16)
+        .await
+        .unwrap();
+    assert_eq!(&bytes[..], b"xxxx");
+    assert!(started.elapsed() >= t * 6, "{:?}", started.elapsed());
+    assert_eq!(get(&mut c, "/v2/ready").await.0, 200);
+    assert_eq!(td.state.stats.head_timeouts.load(SeqCst), 0);
 }
 
 // ── Downgrade and diversion ──────────────────────────────────────────────────

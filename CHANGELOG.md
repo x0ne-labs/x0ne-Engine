@@ -18,6 +18,11 @@ the first non-beta tag will freeze the receipt protocol below.
   Until then only the scheme was checked: a 302 to `https://0.0.0.0:<port>/`
   reached a service on the machine's own loopback. Names are not resolved, as
   for the source itself.
+- The TD closes a connection whose next request head is not whole within 61
+  minutes of the handshake or of the previous answer's end, slow or idle, and
+  counts it (`head_timeouts`, 2026-11-05). There was no limit: hyper drops its
+  30 s default when no timer is set. An idle relay connection is closed too;
+  the relay opens a new checked one.
 
 ## 0.2.0-beta.7 — 2026-11-04
 

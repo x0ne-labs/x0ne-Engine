@@ -97,8 +97,14 @@ impl Default for QuoteLimits {
 /// `--max-handshakes` when the operator names none.
 pub const DEFAULT_MAX_HANDSHAKES: usize = 256;
 
+/// hyper 1.11 arms this on an idle connection too, and a relay's request leaving as that
+/// connection closes fails and loses its session (287 of 1000 on a swept gap, 2026-11-05):
+/// long, and off the hour a client might poll at.
+pub const DEFAULT_HEAD_TIMEOUT: Duration = Duration::from_secs(61 * 60);
+
 /// The bounds on TLS handshakes: the only work the TD does for a peer
-/// before mutual TLS has said who it is.
+/// before mutual TLS has said who it is. And the bound on what follows the
+/// handshake until a request head is whole.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HandshakeLimits {
     /// A handshake not finished by then is dropped.
@@ -106,6 +112,9 @@ pub struct HandshakeLimits {
     /// Handshakes in flight. One more drops the oldest handshake of the
     /// source holding the most, never the newcomer.
     pub max_in_flight: usize,
+    /// A connection whose next request head is not whole by then, counted from
+    /// the handshake or the previous answer's end, is closed: slow or idle.
+    pub head_timeout: Duration,
 }
 
 impl Default for HandshakeLimits {
@@ -113,6 +122,7 @@ impl Default for HandshakeLimits {
         Self {
             timeout: Duration::from_secs(10),
             max_in_flight: DEFAULT_MAX_HANDSHAKES,
+            head_timeout: DEFAULT_HEAD_TIMEOUT,
         }
     }
 }
@@ -371,6 +381,8 @@ pub struct Stats {
     pub handshake_timeouts: AtomicU64,
     /// Handshakes dropped for a newer one past [`HandshakeLimits::max_in_flight`].
     pub handshakes_dropped: AtomicU64,
+    /// Connections closed for [`HandshakeLimits::head_timeout`].
+    pub head_timeouts: AtomicU64,
     pub key_posts: AtomicU64,
     /// `GET /v2/model-key/recipient` answered with a quote.
     pub recipient_quotes: AtomicU64,
@@ -1530,9 +1542,20 @@ pub(crate) async fn serve_tls_app(
                 .layer(axum::Extension(ConnectionQuotes::default()));
             let io = hyper_util::rt::TokioIo::new(tls);
             let service = hyper_util::service::TowerToHyperService::new(app);
-            let _ = hyper::server::conn::http1::Builder::new()
+            // SECURITY: without a timer, hyper 1.11 drops its 30 s default in silence.
+            let served = hyper::server::conn::http1::Builder::new()
+                .timer(hyper_util::rt::TokioTimer::new())
+                .header_read_timeout(limits.head_timeout)
                 .serve_connection(io, service)
                 .await;
+            if served.is_err_and(|e| e.is_timeout()) {
+                count_and_log(&stats_state.stats.head_timeouts, |n| {
+                    format!(
+                        "no whole request head from {source} in {:?}, slow or idle: closed ({n} so far)",
+                        limits.head_timeout
+                    )
+                });
+            }
         });
     }
 }
@@ -1565,6 +1588,7 @@ mod tests {
             limits: HandshakeLimits {
                 timeout: Duration::from_secs(10),
                 max_in_flight: 3,
+                head_timeout: DEFAULT_HEAD_TIMEOUT,
             },
             table: Mutex::default(),
         };

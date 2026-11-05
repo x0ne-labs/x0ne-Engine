@@ -242,6 +242,15 @@ median 698 ms (n=5); the in-TD quote generation time is not isolated, and it
 is the term that matters. The relay keeps its connections open, so the cost
 is paid per connection, not per request.
 
+After mutual TLS, a request head must be whole within 61 minutes of the
+handshake or of the previous answer's end; the TD closes the connection
+otherwise, slow or idle, and counts it (`head_timeouts`). An answer is not timed
+by this. The relay opens a new checked connection after such a close, but a
+request that leaves as its connection closes fails and loses the session
+(`cloud_e2e_tests::measure_a_request_racing_the_close_of_an_idle_connection`):
+the limit is long for that reason. It bounds what a peer can hold for ever, not
+how many connections the holder of the relay's key can open.
+
 No flag and no variable sets an
 anchor or skips a check (`tests/cloud_source_sweep.rs`).
 
