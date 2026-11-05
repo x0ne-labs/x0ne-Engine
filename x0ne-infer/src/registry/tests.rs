@@ -1853,7 +1853,7 @@ fn a_redirect_is_judged_as_the_source_itself() {
     assert_eq!(Reach::of("https://w.example/m.sealed"), Reach::Public);
     assert_eq!(Reach::of("https://8.8.8.8/m"), Reach::Public);
     assert_eq!(Reach::of("http://127.0.0.1:9"), Reach::Loopback);
-    assert_eq!(Reach::of("https://10.0.0.5"), Reach::Private);
+    assert_eq!(Reach::of("https://172.16.0.5"), Reach::Private);
     assert_eq!(Reach::of("https://mirror.localhost"), Reach::Private);
 
     let public = [
@@ -1875,8 +1875,8 @@ fn a_redirect_is_judged_as_the_source_itself() {
         ("https://metadata.google.internal/m", "metadata"),
         ("https://METADATA.Google.Internal./m", "metadata"),
         ("https://instance-data/latest/meta-data/", "metadata"),
-        ("https://10.0.0.1/m", "RFC 1918"),
-        ("https://192.168.1.1/m", "RFC 1918"),
+        ("https://172.16.0.1/m", "RFC 1918"),
+        ("https://172.31.1.1/m", "RFC 1918"),
         ("https://[fd00::1]/m", "fc00::/7"),
         ("https://0.0.0.0:443/m", "unspecified"),
         ("https://[::]/m", "unspecified"),
@@ -1914,7 +1914,7 @@ fn a_redirect_is_judged_as_the_source_itself() {
     for reach in [Reach::Public, Reach::Loopback, Reach::Private] {
         for to in [
             "http://w.example/m",
-            "http://10.0.0.1/m",
+            "http://172.16.0.1/m",
             "ftp://w.example/m",
         ] {
             let e = redirect_refusal(reach, &url(to)).unwrap_or_else(|| panic!("{reach:?} {to}"));
@@ -1924,7 +1924,7 @@ fn a_redirect_is_judged_as_the_source_itself() {
     // A refusal names the host, never the target's path, query or userinfo:
     // a CDN's URL may carry a signature.
     for to in [
-        "https://10.0.0.1/p?sig=secret",
+        "https://172.16.0.1/p?sig=secret",
         "http://u:secret@w.example/secret?secret",
     ] {
         let e = redirect_refusal(Reach::Public, &url(to)).expect(to);

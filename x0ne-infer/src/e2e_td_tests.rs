@@ -3051,8 +3051,14 @@ async fn the_rest_of_an_answer_in_the_final_chunk_reaches_the_caller() {
     assert_carried_blind(&carrier.seen, &[FULL_NEEDLE]);
 }
 
-/// [`Scripted`], each generation's start noted.
+/// [`Scripted`], each generation's start noted, the second one held
+/// [`SECOND_GENERATION`] longer.
 struct Clocked(Scripted, Arc<Mutex<Vec<Instant>>>);
+
+// Its 20 ms alone flaked: a second request reaching the TD more than that after the first
+// ended at 16 chunks (1 run in 11, loaded machine; a 100 ms gap forces it, 2026-11-05). With
+// 800 ms a gap up to 700 ms passed and 900 ms failed: the measured margin.
+const SECOND_GENERATION: Duration = Duration::from_millis(800);
 
 impl LoadedModel for Clocked {
     fn generate(
@@ -3068,7 +3074,14 @@ impl LoadedModel for Clocked {
         params: &GenerationParams,
         sink: &mut dyn crate::backend::TokenSink,
     ) -> anyhow::Result<crate::backend::Completion> {
-        self.1.lock().unwrap().push(Instant::now());
+        let nth = {
+            let mut starts = self.1.lock().unwrap();
+            starts.push(Instant::now());
+            starts.len()
+        };
+        if nth == 2 {
+            std::thread::sleep(SECOND_GENERATION);
+        }
         self.0.generate_streaming(prompt, params, sink)
     }
     fn chat_prompt(&self, messages: &[crate::server::ChatMessage]) -> crate::prompt::Prompt {
@@ -3089,7 +3102,7 @@ impl LoadedModel for Clocked {
 /// a power of two of ticks after its request, as its chunks do: ended a
 /// Padme size after its generation (12 % at most), a host that probes the
 /// queue read the generation's time finer than the count of chunks tells
-/// it (an audit, 2026-10-30). Two short streams asked together: the second's
+/// it (an audit, 2026-10-30). Two streams asked together: the second's
 /// generation starts 16 ticks after the first's request, and the second
 /// ends at 32 chunks, not 16: the cost, printed. Measured 2026-10-30 before
 /// the change: generations at 48 ms and 1.05 s, 16 chunks each. A failure
