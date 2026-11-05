@@ -350,11 +350,11 @@ fn foreign_dir(dir: &Path, meta: &std::fs::Metadata, uid: u32, leaf: bool) -> Op
     None
 }
 
+/// `subtle`, through p256's re-export: no crate added. Unequal lengths answer at
+/// once: the bearer's length is public, 64 hex digits.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+    use p256::elliptic_curve::subtle::ConstantTimeEq as _;
+    a.ct_eq(b).into()
 }
 
 /// OpenAI's shape (`crate::openai::error`), `param` and `code` null.
@@ -2069,6 +2069,7 @@ mod tests {
         assert!(constant_time_eq(b"abc", b"abc"));
         assert!(!constant_time_eq(b"abc", b"abd"));
         assert!(!constant_time_eq(b"abc", b"ab"));
+        assert!(!constant_time_eq(b"", b"abc"));
     }
 
     mod streams {
