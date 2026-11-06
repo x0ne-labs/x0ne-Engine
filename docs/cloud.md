@@ -492,6 +492,7 @@ the next `pull`. Version 1 (sha256 of `model.safetensors` ‖ `config.json` ‖
 | a token `up` cannot renew leaves less than the boot timeout plus 5 min, before the quote or after "yes", or tokeninfo gives no expiry | 91 | nothing |
 | Ctrl-C before serving | 130 | nothing; during the creation, the deletion waits for the creation call to return |
 | the relay refuses the proof | its code, 64–87 | nothing; its evidence file, if it wrote one |
+| the model owner's key policy (`--key-policy`) refuses the verified TD, or the session before anything is created | 102 | nothing; after the verdict, its evidence file, if it wrote one |
 | x0ne-infer in the VM exits on a final refusal, read on the serial console before the verdict | 97 | the VM's serial console, saved (see [Files](#files)) |
 | the relay was built without an archive key or a transparency log, or pins the TEST ones (`pins`, before the token) | 95 | nothing |
 | the relay crashes or breaks the protocol | 95 | nothing |
@@ -898,7 +899,7 @@ signal (SIGTERM).
 | → relay | `connect{endpoint "IP:443", boot_deadline_unix}` | sent once the VM is `RUNNING` |
 | relay → | `progress{stage, detail}` | printed; stage `releasing` is step `[4/5]` |
 | relay → | `verified{verdict, limitations}` | printed and saved in the session state |
-| relay → | `refused{code, reason, evidence_file}` | `up` waits up to 5 s for the relay to exit, and kills it after; N is its exit code or, without one (killed, or ended by a signal), the event's `code`, 95 when outside 64–87; printed as `REFUSED (N): <reason>`; `up` exits with the relay's exit code when it is 64–87, otherwise with the event's `code` (64–87; anything else becomes 95) |
+| relay → | `refused{code, reason, evidence_file}` | `up` waits up to 5 s for the relay to exit, and kills it after; N is its exit code or, without one (killed, or ended by a signal), the event's `code`, 95 when neither 64–87 nor 102; printed as `REFUSED (N): <reason>`; `up` exits with the relay's exit code when it is 64–87 or 102, otherwise with the event's `code` (64–87 or 102; anything else becomes 95) |
 | relay → | `serving{listen, key_file}` | accepted only after `verified` |
 | → relay | `stop` | then end of input; the relay answers `stopped` and exits |
 
@@ -920,6 +921,7 @@ relay failure. The VM is deleted.
 | 95 | the relay failed, or refused before its config: image reference unusable (its 89), not signed by the pinned archive key (its 99), not shown in the pinned transparency log (its 100), or reporting RTMR0 instead of pinning it (its 104: `rtmr0.policy` must be `gce-endorsed`); a relay built without an archive key or a log is refused before the token |
 | 96 | `run`'s chat failed; the VM is deleted |
 | 97 | x0ne-infer in the VM refused to serve, a refusal its restarts will not change, read on the serial console before the verdict; the VM is deleted |
+| 102 | the model owner's key policy (`--model-key`, `--key-policy`) refused the TD or the session, or its files are unusable: the relay's 102; what was created is deleted |
 | 130 | interrupted before serving; what was created is deleted |
 
 ## Test overrides, loopback only, test builds only

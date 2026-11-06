@@ -364,9 +364,9 @@ pub fn parse_event(line: &str) -> Result<Event, String> {
         }),
         Some("refused") => Ok(Event::Refused {
             code: v["code"]
-                .as_u64()
-                .filter(|c| (64..=87).contains(c))
-                .map_or(95, |c| c as u8),
+                .as_i64()
+                .and_then(crate::relay_refusal)
+                .unwrap_or(95),
             reason: s("reason").unwrap_or_else(|| "no reason given".into()),
             evidence_file: s("evidence_file"),
         }),
@@ -666,9 +666,13 @@ mod tests {
             }
             e => panic!("{e:?}"),
         }
-        match parse_event(r#"{"v":1,"event":"refused","code":0}"#).unwrap() {
-            Event::Refused { code, .. } => assert_eq!(code, 95),
-            e => panic!("{e:?}"),
+        // 102: the model owner's key policy; 101 (a panic) is not a refusal.
+        for (sent, kept) in [(0, 95), (102, 102), (101, 95)] {
+            let line = format!(r#"{{"v":1,"event":"refused","code":{sent}}}"#);
+            match parse_event(&line).unwrap() {
+                Event::Refused { code, .. } => assert_eq!(code, kept, "{sent}"),
+                e => panic!("{e:?}"),
+            }
         }
         let serving = |extra: &str| {
             parse_event(&format!(

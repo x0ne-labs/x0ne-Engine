@@ -217,6 +217,45 @@ fn a_refusal_exits_with_the_relay_code_and_the_vm_is_deleted() {
     assert_cleaned(&gcp, &vm_name(&gcp));
 }
 
+/// The model owner's key policy refuses the TD after the verdict: the relay
+/// exits 102 and so does `up` (2026-11-06, H100 run: `up` printed
+/// "REFUSED (102)" and exited 95).
+#[test]
+fn a_key_policy_refusal_exits_102_and_the_vm_is_deleted() {
+    let gcp = FakeGcp::start(Cloud::default());
+    let env = Env::new(Some(Relay::Refuse(102)));
+    let mut cmd = env.command(&gcp.base, &up_args(&[]));
+    let d = spawn(&env, &mut cmd, Some(TOKEN), "up", None).finish();
+    assert_eq!(d.code, 102, "{}", d.err);
+    assert!(d.err.contains("      REFUSED (102): "), "{}", d.err);
+    assert_cleaned(&gcp, &vm_name(&gcp));
+}
+
+/// The same refusal before the config (an expired policy, unusable files):
+/// 102, and nothing is created.
+#[test]
+fn a_key_policy_refusal_before_the_config_exits_102_and_creates_nothing() {
+    let gcp = FakeGcp::start(Cloud::default());
+    let env = Env::new(Some(Relay::ExitBeforeConfig(102)));
+    let mut cmd = env.command(&gcp.base, &up_args(&[]));
+    let d = spawn(&env, &mut cmd, Some(TOKEN), "up", None).finish();
+    assert_eq!(d.code, 102, "{}", d.err);
+    no_creation(&gcp);
+}
+
+/// Only the documented codes pass: a relay that exits 101 (a Rust panic)
+/// after a `refused` event is a relay failure.
+#[test]
+fn a_refusal_with_an_undocumented_code_is_95() {
+    let gcp = FakeGcp::start(Cloud::default());
+    let env = Env::new(Some(Relay::Refuse(101)));
+    let mut cmd = env.command(&gcp.base, &up_args(&[]));
+    let d = spawn(&env, &mut cmd, Some(TOKEN), "up", None).finish();
+    assert_eq!(d.code, 95, "{}", d.err);
+    assert!(d.err.contains("      REFUSED (101): "), "{}", d.err);
+    assert_cleaned(&gcp, &vm_name(&gcp));
+}
+
 #[test]
 fn a_relay_crash_during_verification_is_95_and_the_vm_is_deleted() {
     let gcp = FakeGcp::start(Cloud::default());

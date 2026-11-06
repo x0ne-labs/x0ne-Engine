@@ -88,6 +88,18 @@ pub const DEFAULT_MAX_RUN_SECS: u64 = 60 * 60;
 pub const MAX_RUN_CAP_SECS: u64 = 8 * 60 * 60;
 pub const MIN_RUN_SECS: u64 = 10 * 60;
 
+/// The relay's exit when the model owner's key policy refuses the TD or the
+/// session, or its files are unusable (x0ne-infer `model_key::EXIT_POLICY`).
+pub const KEY_POLICY_REFUSED: u8 = 102;
+
+/// The relay's exit codes `up` keeps as its own: the verdict's refusals,
+/// 64-87, and [`KEY_POLICY_REFUSED`]. Any other is a relay failure, 95.
+pub fn relay_refusal(code: i64) -> Option<u8> {
+    u8::try_from(code)
+        .ok()
+        .filter(|c| (64..=87).contains(c) || *c == KEY_POLICY_REFUSED)
+}
+
 /// Why a command stopped. Each variant is one exit code (docs/cloud.md).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Failure {
@@ -103,7 +115,7 @@ pub enum Failure {
     VmLost(String),
     /// 94: deletion could not be confirmed. Critical: money may be running.
     DeleteUnconfirmed(String),
-    /// 64..=87: the relay's own refusal code (x0ne-infer's table).
+    /// 64..=87 or 102: the relay's own refusal code ([`relay_refusal`]).
     Relay(u8, String),
     /// 95: the relay crashed or broke the relay protocol.
     RelayFailed(String),

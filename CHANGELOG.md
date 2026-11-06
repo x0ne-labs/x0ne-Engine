@@ -125,6 +125,12 @@ history: candle has been the CPU reference of the tests since 2026-11-04.
 
 ### Changes, newest first
 
+- `x0ne-engine cloud up` and `run` exit 102 when the model owner's key
+  policy refuses the TD or the session, as the relay does (2026-11-06). They
+  kept the relay's codes 64-87 only: on 2026-11-06, on an H100 TDX VM the
+  policy did not name, `up` printed `REFUSED (102)`, sent nothing to the VM,
+  deleted it and exited 95. Any other relay code is still 95. The help and
+  docs/cloud.md list 102.
 - The `memfd_secret` test checks that the pages stay out of swap, not that
   they are `mlock`ed (2026-11-05). Linux commit 97d34aa65c29 (stable
   6.12.113, CVE-2026-93243) no longer marks a `memfd_secret` mapping

@@ -132,6 +132,20 @@ fn no_other_module_reads_an_endpoint_from_the_environment() {
     }
 }
 
+/// `up` exits 102 when the relay does for the owner's key policy: the same
+/// number on both sides.
+#[test]
+fn the_key_policy_code_up_keeps_is_the_relays() {
+    let path = manifest_dir().join("../x0ne-infer/src/model_key.rs");
+    let relay =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let line = format!(
+        "pub const EXIT_POLICY: i32 = {};",
+        x0ne_engine_cloud::KEY_POLICY_REFUSED
+    );
+    assert!(relay.contains(&line), "x0ne-infer has no `{line}`");
+}
+
 /// `color.rs`, compiled into the relay too (x0ne-infer's `term_color`): one
 /// read, of the four color variables, which the relay receives (`KEPT_ENV`).
 /// Without `--reference`, `up` names the image of the reference the relay

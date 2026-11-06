@@ -90,7 +90,8 @@ EXIT CODES:
   75 NRAS, 76 Intel PCS) · 90 quote refused · 91 preflight · 92 provider API ·
   93 VM lost (preemption, boot timeout) · 94 DELETION NOT CONFIRMED · 95 relay
   failed · 96 the chat failed (run: the VM is deleted) · 97 x0ne-infer in the VM
-  refused to serve, read on its serial console (the VM is deleted) · 130
+  refused to serve, read on its serial console (the VM is deleted) · 102 the
+  model owner's key policy refused the TD or the session (--key-policy) · 130
   interrupted before serving (what was created is deleted)
 ";
 

@@ -369,12 +369,13 @@ fn stop_text(r: &StopReason) -> String {
 
 /// A relay that ended: its own refusal code, or 95.
 fn relay_ended(code: Option<i32>, when: &str) -> Failure {
-    match code {
-        Some(c) if (64..=87).contains(&c) => {
-            Failure::Relay(c as u8, format!("the relay exited with code {c} {when}"))
-        }
-        Some(c) => Failure::RelayFailed(format!("the relay exited with code {c} {when}")),
-        None => Failure::RelayFailed(format!("the relay was killed {when}")),
+    let Some(c) = code else {
+        return Failure::RelayFailed(format!("the relay was killed {when}"));
+    };
+    let why = format!("the relay exited with code {c} {when}");
+    match crate::relay_refusal(c.into()) {
+        Some(r) => Failure::Relay(r, why),
+        None => Failure::RelayFailed(why),
     }
 }
 
@@ -383,12 +384,13 @@ fn relay_ended(code: Option<i32>, when: &str) -> Failure {
 const REFUSAL_WAIT: Duration = Duration::from_secs(10);
 
 /// After a `refused` event: the code the relay refused with, its exit status
-/// (`--quiet` keeps it from printing it), and `up`'s, 64-87 or the event's.
+/// (`--quiet` keeps it from printing it), and `up`'s: that status when
+/// [`crate::relay_refusal`] keeps it, the event's code otherwise.
 async fn refusal_codes(proxy: &mut Proxy, event_code: u8) -> (i32, u8) {
     let c = proxy.exit_code().await;
     let exit = c
-        .filter(|c| (64..=87).contains(c))
-        .map_or(event_code, |c| c as u8);
+        .and_then(|c| crate::relay_refusal(c.into()))
+        .unwrap_or(event_code);
     (c.unwrap_or(i32::from(event_code)), exit)
 }
 
