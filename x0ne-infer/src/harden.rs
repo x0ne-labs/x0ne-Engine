@@ -129,8 +129,9 @@ pub enum Backing {
 
 /// A key in memory kept out of swap and core dumps, and zeroed on drop. On
 /// Linux it is never on the heap: if neither `memfd_secret` nor `mlock`
-/// works, construction fails; past `RLIMIT_MEMLOCK`, a kernel with Linux
-/// commit 97d34aa65c29 raises SIGBUS at the first write instead.
+/// works, construction fails. `memfd_secret` pages are written at
+/// construction: a kernel with Linux commit 97d34aa65c29 counts them against
+/// `RLIMIT_MEMLOCK` then, and past it construction fails, not a later write.
 pub struct SecretBytes {
     region: Region,
     len: usize,
@@ -157,10 +158,18 @@ impl SecretBytes {
     pub fn new(len: usize) -> io::Result<Self> {
         #[cfg(target_os = "linux")]
         {
-            match linux::map(len, Backing::SecretMem) {
-                Ok(s) => Ok(s),
-                Err(_) => linux::map(len, Backing::Locked),
-            }
+            linux::map(len, Backing::SecretMem).or_else(|secret| {
+                linux::map(len, Backing::Locked).map_err(|locked| {
+                    io::Error::new(
+                        locked.kind(),
+                        format!(
+                            "neither memfd_secret ({secret}) nor mlock ({locked}) holds {len} \
+                             bytes; {}",
+                            linux::memlock_limit()
+                        ),
+                    )
+                })
+            })
         }
         #[cfg(not(target_os = "linux"))]
         Ok(Self {
@@ -327,11 +336,16 @@ mod linux {
                 if p == libc::MAP_FAILED {
                     return Err(last());
                 }
-                // A shared mapping would follow a fork. Over RLIMIT_MEMLOCK the mmap above
-                // fails (EAGAIN, 2026-10-13, 6.12); since 97d34aa65c29 it succeeds and the
-                // first write past the user's limit raises SIGBUS (2026-11-05, 6.12.115).
+                // A shared mapping would follow a fork.
                 if libc::madvise(p, map_len, libc::MADV_DONTFORK) != 0 {
                     let e = last();
+                    libc::munmap(p, map_len);
+                    return Err(e);
+                }
+                // Over RLIMIT_MEMLOCK the mmap fails (EAGAIN, 6.12, 2026-10-13); since
+                // 97d34aa65c29 the first write does, by SIGBUS (6.12.115, 2026-11-05).
+                // A kernel copy into the pages gets EFAULT there instead: done now.
+                if let Err(e) = fault_in(p, map_len) {
                     libc::munmap(p, map_len);
                     return Err(e);
                 }
@@ -342,9 +356,71 @@ mod linux {
         }
     }
 
+    /// Writes zeros over `p..p + len` by `read(2)` from `/dev/zero`: a fault
+    /// the kernel refuses is EFAULT here, where a store from this process
+    /// would get SIGBUS.
+    ///
+    /// # Safety
+    /// `p..p + len` is a writable mapping that nothing else refers to.
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    unsafe fn fault_in(p: *mut libc::c_void, len: usize) -> io::Result<()> {
+        // SAFETY: an fd opened and closed here; `read` writes inside the
+        // mapping only, at most `len - done` bytes from `p + done`.
+        unsafe {
+            let zero = libc::open(c"/dev/zero".as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC);
+            if zero < 0 {
+                let e = last();
+                return Err(io::Error::new(e.kind(), format!("/dev/zero: {e}")));
+            }
+            let mut done = 0;
+            let out = loop {
+                if done == len {
+                    break Ok(());
+                }
+                let n = libc::read(zero, p.cast::<u8>().add(done).cast(), len - done);
+                match usize::try_from(n) {
+                    Ok(0) => break Err(io::Error::from(io::ErrorKind::UnexpectedEof)),
+                    Ok(n) => done += n,
+                    Err(_) => {
+                        let e = last();
+                        if e.kind() != io::ErrorKind::Interrupted {
+                            break Err(e);
+                        }
+                    }
+                }
+            };
+            libc::close(zero);
+            out.map_err(|e| {
+                io::Error::new(
+                    e.kind(),
+                    format!(
+                        "its pages could not be written ({e}); a kernel with Linux commit \
+                         97d34aa65c29 refuses them past the user's RLIMIT_MEMLOCK"
+                    ),
+                )
+            })
+        }
+    }
+
     #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     fn secretmem(_map_len: usize) -> io::Result<NonNull<u8>> {
         Err(io::ErrorKind::Unsupported.into())
+    }
+
+    /// `RLIMIT_MEMLOCK`'s soft limit, for a message.
+    pub(super) fn memlock_limit() -> String {
+        let mut lim = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        // SAFETY: `lim` outlives the call; getrlimit only writes it.
+        if unsafe { libc::getrlimit(libc::RLIMIT_MEMLOCK, &mut lim) } != 0 {
+            return format!("RLIMIT_MEMLOCK unread ({})", last());
+        }
+        if lim.rlim_cur == libc::RLIM_INFINITY {
+            return "RLIMIT_MEMLOCK unlimited".into();
+        }
+        format!("RLIMIT_MEMLOCK {} bytes", lim.rlim_cur)
     }
 
     fn locked(map_len: usize) -> io::Result<NonNull<u8>> {
@@ -513,17 +589,22 @@ mod tests {
             .expect("Unevictable in /proc/meminfo")
     }
 
-    /// kB of `Unevictable` gained once `region` is written from /dev/zero,
-    /// read until it reaches the region or 2 s pass: the counter is machine
-    /// wide, and per-CPU counts reach it up to a second late.
+    /// `region` written from /dev/zero.
     #[cfg(target_os = "linux")]
-    fn unevictable_gain(region: &mut [u8]) -> u64 {
+    fn write_zeros(region: &mut [u8]) {
         use std::io::Read;
-        let want = (region.len() / 1024) as u64;
-        let before = unevictable_kb();
         // A kernel copy: past the limit a fault is EFAULT here, SIGBUS in user code.
         let mut zero = std::fs::File::open("/dev/zero").unwrap();
         zero.read_exact(region).expect("fault the region in");
+    }
+
+    /// kB of `Unevictable` gained by `fault`, while what it returns lives,
+    /// read until it reaches `want` kB or 2 s pass: the counter is machine
+    /// wide, and per-CPU counts reach it up to a second late.
+    #[cfg(target_os = "linux")]
+    fn unevictable_gain<T>(want: u64, fault: impl FnOnce() -> T) -> u64 {
+        let before = unevictable_kb();
+        let _held = fault();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         loop {
             let gain = unevictable_kb().saturating_sub(before);
@@ -552,6 +633,7 @@ mod tests {
         if len == 0 {
             return None;
         }
+        let want = (len / 1024) as u64;
         // SAFETY: a private anonymous mapping, written through the slice
         // below while it lives, unmapped here.
         let control = unsafe {
@@ -564,13 +646,18 @@ mod tests {
                 0,
             );
             assert_ne!(p, libc::MAP_FAILED);
-            let gain = unevictable_gain(std::slice::from_raw_parts_mut(p.cast::<u8>(), len));
+            let region = std::slice::from_raw_parts_mut(p.cast::<u8>(), len);
+            let gain = unevictable_gain(want, || write_zeros(region));
             libc::munmap(p, len);
             gain
         };
-        let mut s = SecretBytes::with_backing(len, Backing::SecretMem).expect("memfd_secret");
-        let secret = unevictable_gain(s.expose_mut());
-        Some(((len / 1024) as u64, secret, control))
+        // Its pages are written when it is made (`fault_in`), then once more.
+        let secret = unevictable_gain(want, || {
+            let mut s = SecretBytes::with_backing(len, Backing::SecretMem).expect("memfd_secret");
+            write_zeros(s.expose_mut());
+            s
+        });
+        Some((want, secret, control))
     }
 
     /// Linux: out of swap and core dumps, not inherited by a fork; in

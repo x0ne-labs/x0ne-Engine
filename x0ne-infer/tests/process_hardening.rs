@@ -218,3 +218,75 @@ fn the_relay_binary_is_not_dumpable_has_no_core_and_refuses_its_peers() {
     );
     assert_eq!(traced, Err(libc::EPERM), "PTRACE_ATTACH took");
 }
+
+/// With `RLIMIT_MEMLOCK` 0, neither `memfd_secret` nor `mlock` holds the
+/// first key cloud mode makes, its TLS identity: exit 97, saying why, and no
+/// signal. Linux commit 97d34aa65c29 (stable 6.12.113) counts `memfd_secret`
+/// pages against the limit at their first write: on 6.12.115 that write
+/// raised SIGBUS until 2026-11-06.
+#[test]
+fn without_lockable_memory_cloud_mode_exits_97_not_by_a_signal() {
+    use std::os::unix::process::{CommandExt, ExitStatusExt};
+    if !ordinary_user_or_skip("without_lockable_memory_cloud_mode_exits_97_not_by_a_signal") {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let config = x0ne_infer::cloud_config::CloudConfig::new(
+        "qwen3:0.6b",
+        [0xab; 32],
+        [0xcd; 32],
+        now + 3600,
+        "cpu",
+        443,
+        64,
+    )
+    .to_loaded()
+    .unwrap();
+    let config_path = dir.path().join("config.json");
+    std::fs::write(&config_path, &config.bytes).unwrap();
+    let store = dir.path().join("models");
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_x0ne-infer"));
+    // cargo sets LD_LIBRARY_PATH for tests; a release x0ne-infer refuses it (73).
+    cmd.env_remove("LD_LIBRARY_PATH")
+        .env_remove("X0NE_INFER_KEY_HEX")
+        .args([
+            "--cloud-config",
+            config_path.to_str().unwrap(),
+            "--attest",
+            "cpu",
+            "--device",
+            "cpu",
+            "--model-store",
+            store.to_str().unwrap(),
+            "--catalog-endpoint",
+            "http://127.0.0.1:9",
+            "--tls-listen",
+            "127.0.0.1:0",
+        ])
+        .stdin(Stdio::null());
+    // SAFETY: setrlimit only, in the child between fork and exec.
+    unsafe {
+        cmd.pre_exec(|| {
+            let none = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            if libc::setrlimit(libc::RLIMIT_MEMLOCK, &none) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let out = cmd.output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.signal(), None, "killed by a signal: {err}");
+    assert_eq!(out.status.code(), Some(97), "{err}");
+    assert!(
+        err.contains("TLS identity") && err.contains("RLIMIT_MEMLOCK"),
+        "the message does not say why: {err}"
+    );
+}

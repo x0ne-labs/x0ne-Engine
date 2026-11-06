@@ -125,6 +125,15 @@ history: candle has been the CPU reference of the tests since 2026-11-04.
 
 ### Changes, newest first
 
+- `SecretBytes` writes its `memfd_secret` pages when it is made, by
+  `read(2)` from `/dev/zero` (2026-11-06). A kernel with Linux commit
+  97d34aa65c29 counts them against the user's `RLIMIT_MEMLOCK` at that first
+  write: past it, the kernel's copy fails with EFAULT, where a store from the
+  process got SIGBUS. Construction then falls back to `mlock`, and fails if
+  that fails too, naming both and the limit: with `RLIMIT_MEMLOCK` 0, cloud
+  mode exits 97 at its TLS identity, where it died of SIGBUS on 6.12.115
+  (`tests/process_hardening.rs`). `MADV_POPULATE_WRITE` does not fault these
+  pages in (EINVAL, measured on 2026-11-05).
 - The relay makes each GET to Intel (PCS, root CA CRL) up to three times:
   again 1 s then 2 s after a transport error, a 5xx or a 429, never after
   another answer or a document that does not parse (2026-11-06). Each
@@ -149,8 +158,9 @@ history: candle has been the CPU reference of the tests since 2026-11-04.
   at least and by less than a quarter of the second. It passes on 6.12.111
   and 6.12.115, and fails when the region is an ordinary memfd. The same
   commit counts these pages against the user's `RLIMIT_MEMLOCK` when they are
-  first written: past it, `SecretBytes` gets SIGBUS at the first write,
-  where its construction failed with an error before (the TD exited 97).
+  first written: past it, `SecretBytes` got SIGBUS at the first write,
+  where its construction failed with an error before (the TD exited 97);
+  since 2026-11-06 construction fails there again (above).
   The docs no longer call this memory locked.
 - x0ne Core is the served engine (2026-11-04). With the `cuda` feature, the
   attested server runs the model on x0ne Core, written for this project in
