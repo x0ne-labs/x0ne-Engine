@@ -283,37 +283,119 @@ fn percent_decode(s: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
-pub async fn fetch_pcs(http: &reqwest::Client, url: &str) -> Result<Collateral, String> {
-    let resp = http
-        .get(url)
-        .timeout(std::time::Duration::from_secs(PCS_TIMEOUT_SECS))
-        .send()
-        .await
-        .map_err(|e| format!("GET {url}: {e}"))?;
-    if !resp.status().is_success() {
-        return Err(format!("PCS answered {} for {url}", resp.status()));
+/// Pauses before the second and third GET to Intel (PCS, root CA CRL), after
+/// a transport error, a 5xx or a 429 only. With 20 s per GET, one document
+/// takes 63 s at most. 2026-11-06: one transport error refused a paid VM (76).
+pub const PCS_RETRY_PAUSES_SECS: [u64; 2] = [1, 2];
+
+/// One failed GET: why, and whether another may pass.
+struct Failed {
+    retry: bool,
+    why: String,
+}
+
+/// reqwest's summary and the causes under it, without its copy of the URL:
+/// "error sending request" alone does not say what failed.
+fn cause_chain(e: reqwest::Error) -> String {
+    let e = e.without_url();
+    let mut out = e.to_string();
+    let mut next = std::error::Error::source(&e);
+    while let Some(cause) = next {
+        let said = cause.to_string();
+        if !out.ends_with(&said) {
+            out.push_str(": ");
+            out.push_str(&said);
+        }
+        next = cause.source();
     }
-    let date_unix = resp
-        .headers()
-        .get(reqwest::header::DATE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(parse_http_date);
-    let chain_encoded = ["TCB-Info-Issuer-Chain", "SGX-Enclave-Identity-Issuer-Chain"]
-        .iter()
-        .find_map(|h| resp.headers().get(*h))
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_string)
-        .ok_or("PCS answer carries no issuer-chain header")?;
-    let chain_pem = percent_decode(&chain_encoded)
-        .ok_or("issuer-chain header is not valid percent-encoding")?;
-    let body = crate::http_body::read_capped(resp, MAX_COLLATERAL_BYTES)
+    out
+}
+
+/// GET `url` at Intel, `read` taking a 2xx answer, retried as
+/// [`PCS_RETRY_PAUSES_SECS`] says; an error after a retry names the attempts.
+async fn pcs_get<T, F, Fut>(http: &reqwest::Client, url: &str, read: F) -> Result<T, String>
+where
+    F: Fn(reqwest::Response) -> Fut,
+    Fut: std::future::Future<Output = Result<T, Failed>>,
+{
+    let mut pauses = PCS_RETRY_PAUSES_SECS.iter();
+    let mut attempts = 1;
+    loop {
+        let sent = http
+            .get(url)
+            .timeout(std::time::Duration::from_secs(PCS_TIMEOUT_SECS))
+            .send()
+            .await;
+        let failed = match sent {
+            Ok(resp) if resp.status().is_success() => match read(resp).await {
+                Ok(v) => return Ok(v),
+                Err(f) => f,
+            },
+            Ok(resp) => {
+                let s = resp.status();
+                Failed {
+                    retry: s.is_server_error() || s == reqwest::StatusCode::TOO_MANY_REQUESTS,
+                    why: format!("PCS answered {s} for {url}"),
+                }
+            }
+            Err(e) => Failed {
+                retry: !(e.is_builder() || e.is_redirect()),
+                why: format!("GET {url}: {}", cause_chain(e)),
+            },
+        };
+        match pauses.next().filter(|_| failed.retry) {
+            Some(secs) => tokio::time::sleep(std::time::Duration::from_secs(*secs)).await,
+            None if attempts == 1 => return Err(failed.why),
+            None => return Err(format!("{} ({attempts} attempts)", failed.why)),
+        }
+        attempts += 1;
+    }
+}
+
+/// A PCS body: past the cap is final, a broken transfer may pass again.
+async fn pcs_body(resp: reqwest::Response) -> Result<Vec<u8>, Failed> {
+    use crate::http_body::BodyError;
+    crate::http_body::read_body(resp, MAX_COLLATERAL_BYTES)
         .await
-        .map_err(|e| format!("PCS body: {e}"))?;
-    Ok(Collateral {
-        body: String::from_utf8(body).map_err(|_| "PCS body is not UTF-8")?,
-        chain_pem,
-        date_unix,
+        .map_err(|e| match e {
+            BodyError::Over(_) => Failed {
+                retry: false,
+                why: format!("PCS body: {e}"),
+            },
+            BodyError::Transfer(t) => Failed {
+                retry: true,
+                why: format!("PCS body: {}", cause_chain(t)),
+            },
+        })
+}
+
+pub async fn fetch_pcs(http: &reqwest::Client, url: &str) -> Result<Collateral, String> {
+    pcs_get(http, url, |resp| async move {
+        let bad = |why: &str| Failed {
+            retry: false,
+            why: why.into(),
+        };
+        let date_unix = resp
+            .headers()
+            .get(reqwest::header::DATE)
+            .and_then(|v| v.to_str().ok())
+            .and_then(parse_http_date);
+        let chain_encoded = ["TCB-Info-Issuer-Chain", "SGX-Enclave-Identity-Issuer-Chain"]
+            .iter()
+            .find_map(|h| resp.headers().get(*h))
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+            .ok_or_else(|| bad("PCS answer carries no issuer-chain header"))?;
+        let chain_pem = percent_decode(&chain_encoded)
+            .ok_or_else(|| bad("issuer-chain header is not valid percent-encoding"))?;
+        let body = pcs_body(resp).await?;
+        Ok(Collateral {
+            body: String::from_utf8(body).map_err(|_| bad("PCS body is not UTF-8"))?,
+            chain_pem,
+            date_unix,
+        })
     })
+    .await
 }
 
 /// Intel's `early` tcbInfo and QE identity for a transparent verdict, or
@@ -423,18 +505,7 @@ async fn fetch_early(
 
 /// GET one binary PCS answer (the PCK CRL, DER): status and size checked.
 pub async fn fetch_pcs_der(http: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
-    let resp = http
-        .get(url)
-        .timeout(std::time::Duration::from_secs(PCS_TIMEOUT_SECS))
-        .send()
-        .await
-        .map_err(|e| format!("GET {url}: {e}"))?;
-    if !resp.status().is_success() {
-        return Err(format!("PCS answered {} for {url}", resp.status()));
-    }
-    crate::http_body::read_capped(resp, MAX_COLLATERAL_BYTES)
-        .await
-        .map_err(|e| format!("PCS body: {e}"))
+    pcs_get(http, url, pcs_body).await
 }
 
 // ── The verdict ──────────────────────────────────────────────────────────────
@@ -2737,6 +2808,132 @@ impl TdClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What one request to [`flaky`] gets.
+    #[derive(Clone, Copy, Debug)]
+    enum Answer {
+        /// The connection closed once the request is read: a transport error.
+        Drop,
+        Status(u16),
+        /// 200, the body `crl`.
+        Crl,
+        /// 200 with an issuer chain: what [`fetch_pcs`] reads.
+        Collateral,
+        /// 200 without the issuer chain: a document that does not parse.
+        NoChain,
+    }
+
+    /// A loopback URL whose first `n` requests get `first`, the others
+    /// `then`; and the count of requests it read.
+    async fn flaky(
+        n: usize,
+        first: Answer,
+        then: Answer,
+    ) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/crl", listener.local_addr().unwrap());
+        let hits = Arc::new(AtomicUsize::new(0));
+        let count = hits.clone();
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                let mut head = Vec::new();
+                let mut buf = [0u8; 1024];
+                while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match sock.read(&mut buf).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(k) => head.extend_from_slice(&buf[..k]),
+                    }
+                }
+                let answer = if count.fetch_add(1, SeqCst) < n {
+                    first
+                } else {
+                    then
+                };
+                let ok = |extra: &str, body: &str| {
+                    format!(
+                        "HTTP/1.1 200 OK\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                };
+                let reply = match answer {
+                    Answer::Drop => continue,
+                    Answer::Status(s) => {
+                        format!("HTTP/1.1 {s} X\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    }
+                    Answer::Crl => ok("", "crl"),
+                    Answer::Collateral => ok("TCB-Info-Issuer-Chain: chain\r\n", "{}"),
+                    Answer::NoChain => ok("", "{}"),
+                };
+                let _ = sock.write_all(reply.as_bytes()).await;
+                let _ = sock.shutdown().await;
+            }
+        });
+        (url, hits)
+    }
+
+    fn requests(hits: &std::sync::atomic::AtomicUsize) -> usize {
+        hits.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// A GET to Intel is tried again after a transport error, at most twice,
+    /// 1 s then 2 s later; the third failure is one error that names its
+    /// cause and the attempts. On 2026-11-06 one transport error to Intel's
+    /// root CA CRL refused a paid VM with 76; the server answered 2 min later.
+    #[tokio::test]
+    async fn a_pcs_get_is_retried_twice_after_a_transport_error() {
+        let http = reqwest::Client::new();
+        for (fails, waited) in [(1, 1), (2, 3)] {
+            let (url, hits) = flaky(fails, Answer::Drop, Answer::Crl).await;
+            let t = std::time::Instant::now();
+            let got = fetch_pcs_der(&http, &url).await;
+            assert_eq!(got.as_deref(), Ok(&b"crl"[..]), "{fails} failure(s)");
+            assert_eq!(requests(&hits), fails + 1);
+            assert!(
+                t.elapsed() >= std::time::Duration::from_secs(waited),
+                "{fails} failure(s) in {:?}",
+                t.elapsed()
+            );
+        }
+        let (url, hits) = flaky(3, Answer::Drop, Answer::Crl).await;
+        let e = fetch_pcs_der(&http, &url).await.unwrap_err();
+        assert_eq!(requests(&hits), 3, "{e}");
+        assert!(e.ends_with("(3 attempts)"), "{e}");
+        // The cause, not reqwest's summary alone, and the URL once.
+        assert!(
+            e.starts_with(&format!("GET {url}: error sending request: ")),
+            "{e}"
+        );
+        assert_eq!(e.matches(url.as_str()).count(), 1, "{e}");
+    }
+
+    /// A 5xx or a 429 is tried again; a 4xx, or a document that does not
+    /// parse, is not: another try would get the same answer.
+    #[tokio::test]
+    async fn a_5xx_or_429_is_retried_a_4xx_or_a_bad_document_is_not() {
+        let http = reqwest::Client::new();
+        for status in [500, 503, 429] {
+            let (url, hits) = flaky(1, Answer::Status(status), Answer::Collateral).await;
+            let got = fetch_pcs(&http, &url).await;
+            assert!(got.is_ok(), "{status}: {:?}", got.err());
+            assert_eq!(requests(&hits), 2, "{status}");
+        }
+        let (url, hits) = flaky(3, Answer::Status(503), Answer::Crl).await;
+        let e = fetch_pcs_der(&http, &url).await.unwrap_err();
+        assert_eq!(requests(&hits), 3, "{e}");
+        assert!(e.contains("503") && e.ends_with("(3 attempts)"), "{e}");
+        for status in [400, 401, 403, 404] {
+            let (url, hits) = flaky(1, Answer::Status(status), Answer::Crl).await;
+            let e = fetch_pcs_der(&http, &url).await.unwrap_err();
+            assert_eq!(requests(&hits), 1, "{status}: {e}");
+            assert!(!e.contains("attempts"), "{e}");
+        }
+        let (url, hits) = flaky(1, Answer::NoChain, Answer::Collateral).await;
+        let e = fetch_pcs(&http, &url).await.err().unwrap();
+        assert_eq!(requests(&hits), 1, "{e}");
+        assert!(e.contains("issuer-chain"), "{e}");
+    }
 
     /// Every verdict says that a stream's text comes before its receipt (D1).
     #[test]

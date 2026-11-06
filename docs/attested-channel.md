@@ -65,6 +65,13 @@ the pinned x0ne archive key before it parses the file (`bin/proxy.rs`,
 key and refuses every reference, see
 [docs/cloud.md](cloud.md#the-image-reference)).
 
+Each of the relay's GETs to Intel (PCS, the root CA CRL) is made at most
+three times: again 1 s, then 2 s, after a transport error, a 5xx or a 429;
+never after another answer, nor after a document that does not parse. Each
+GET has 20 s, so one document takes 63 s at most. Three failures refuse as
+one did before (76), with the transport error's causes in the reason
+(`remote_verify::pcs_get`, since 2026-11-06).
+
 Then, before anything but `GET /v2/attestation` and `GET
 /v2/attestation/session` reaches the TD, the relay checks on YOUR machine,
 in this order (`remote_verify::verify_document`):

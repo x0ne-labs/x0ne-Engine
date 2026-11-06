@@ -1834,6 +1834,17 @@ fn cases() -> Vec<Case> {
                 s
             },
         ),
+        // Three attempts, then the same refusal, with the transport error's cause.
+        case(
+            "Intel root CA CRL unreachable",
+            76,
+            "Intel root CA CRL unreachable: GET http://127.0.0.1:9: error sending request: ",
+            |lab| {
+                let mut s = Scenario::honest(lab);
+                s.env.anchors.root_crl_url = "http://127.0.0.1:9".into();
+                s
+            },
+        ),
         case(
             "clock off by more than 300 s",
             87,
@@ -1961,7 +1972,7 @@ async fn every_refusal_leaves_the_fake_td_without_a_question_or_a_key() {
         seen.push(c.name);
     }
     // The count is the list's length; a case added to `cases()` raises it here.
-    assert_eq!(seen.len(), 24);
+    assert_eq!(seen.len(), 25);
 }
 
 /// The verdict was clean and the key went out; the model the TD then loads

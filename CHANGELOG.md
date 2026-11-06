@@ -125,6 +125,15 @@ history: candle has been the CPU reference of the tests since 2026-11-04.
 
 ### Changes, newest first
 
+- The relay makes each GET to Intel (PCS, root CA CRL) up to three times:
+  again 1 s then 2 s after a transport error, a 5xx or a 429, never after
+  another answer or a document that does not parse (2026-11-06). Each
+  GET has 20 s, so one document takes 63 s at most. Three failures refuse
+  with 76 as one did, and the reason now carries the transport error's
+  causes, where reqwest's summary said "error sending request" alone. On
+  2026-11-06 one transport error on the root CA CRL refused a paid H100 VM
+  with 76; the server answered two minutes later. Google's bucket is still
+  read once.
 - `x0ne-engine cloud up` and `run` exit 102 when the model owner's key
   policy refuses the TD or the session, as the relay does (2026-11-06). They
   kept the relay's codes 64-87 only: on 2026-11-06, on an H100 TDX VM the
