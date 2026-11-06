@@ -576,17 +576,77 @@ mod tests {
             .collect()
     }
 
-    /// `Unevictable` of `/proc/meminfo`, in kB: pages reclaim never takes,
-    /// so never swapped (`mlock`ed, or of an unevictable mapping).
+    /// The file a smaps block maps: what follows the inode on its first line.
+    /// A `memfd_secret` mapping is `/secretmem (deleted)`; an ordinary memfd
+    /// is `/memfd:<name> (deleted)`, whatever name it was given.
     #[cfg(target_os = "linux")]
-    fn unevictable_kb() -> u64 {
-        std::fs::read_to_string("/proc/meminfo")
-            .unwrap()
+    fn mapped_file(block: &str) -> String {
+        let head = block.lines().next().unwrap_or_default();
+        head.split_whitespace()
+            .skip(5)
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Whether the kernel gives this process a `memfd_secret` descriptor,
+    /// asked without `SecretBytes`: where it does, a key in `mlock` memory is
+    /// a regression, not a fallback.
+    #[cfg(target_os = "linux")]
+    fn kernel_offers_memfd_secret() -> io::Result<()> {
+        #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+        // SAFETY: a descriptor created and closed here.
+        unsafe {
+            let fd = libc::syscall(libc::SYS_memfd_secret, libc::O_CLOEXEC);
+            if fd < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            libc::close(fd as libc::c_int);
+            Ok(())
+        }
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+        Err(io::ErrorKind::Unsupported.into())
+    }
+
+    /// The flags every `mlock` key carries: locked, not dumped, wiped in a fork.
+    #[cfg(target_os = "linux")]
+    fn assert_locked_flags(block: &str) {
+        let flags = vm_flags(block);
+        for f in ["lo", "dd", "wf"] {
+            assert!(flags.iter().any(|x| x == f), "Locked lacks {f}: {block}");
+        }
+    }
+
+    /// This process's cgroup v2 `memory.stat`, when it has one with an
+    /// `unevictable` line: other cgroups' pages do not move it.
+    #[cfg(target_os = "linux")]
+    fn own_memory_stat() -> Option<std::path::PathBuf> {
+        let cgroup = std::fs::read_to_string("/proc/self/cgroup").ok()?;
+        let dir = cgroup.lines().find_map(|l| l.strip_prefix("0::"))?;
+        let stat = std::path::Path::new("/sys/fs/cgroup")
+            .join(dir.trim_start_matches('/'))
+            .join("memory.stat");
+        let text = std::fs::read_to_string(&stat).ok()?;
+        text.lines()
+            .any(|l| l.starts_with("unevictable "))
+            .then_some(stat)
+    }
+
+    /// `Unevictable` in kB: pages reclaim never takes, so never swapped
+    /// (`mlock`ed, or of an unevictable mapping). From `memory_stat` when
+    /// given, else from the machine's `/proc/meminfo`.
+    #[cfg(target_os = "linux")]
+    fn unevictable_kb(memory_stat: Option<&std::path::Path>) -> u64 {
+        let (path, key, unit) = match memory_stat {
+            Some(p) => (p, "unevictable ", 1024),
+            None => (std::path::Path::new("/proc/meminfo"), "Unevictable:", 1),
+        };
+        let text = std::fs::read_to_string(path).unwrap();
+        let value = text
             .lines()
-            .find_map(|l| l.strip_prefix("Unevictable:"))
-            .and_then(|v| v.trim().strip_suffix("kB"))
-            .and_then(|v| v.trim().parse().ok())
-            .expect("Unevictable in /proc/meminfo")
+            .find_map(|l| l.strip_prefix(key))
+            .map(|v| v.trim().trim_end_matches("kB").trim())
+            .and_then(|v| v.parse::<u64>().ok());
+        value.unwrap_or_else(|| panic!("{key} in {}", path.display())) / unit
     }
 
     /// `region` written from /dev/zero.
@@ -599,15 +659,19 @@ mod tests {
     }
 
     /// kB of `Unevictable` gained by `fault`, while what it returns lives,
-    /// read until it reaches `want` kB or 2 s pass: the counter is machine
-    /// wide, and per-CPU counts reach it up to a second late.
+    /// read until it reaches `want` kB or 2 s pass: per-CPU counts reach the
+    /// counter up to a second late.
     #[cfg(target_os = "linux")]
-    fn unevictable_gain<T>(want: u64, fault: impl FnOnce() -> T) -> u64 {
-        let before = unevictable_kb();
+    fn unevictable_gain<T>(
+        memory_stat: Option<&std::path::Path>,
+        want: u64,
+        fault: impl FnOnce() -> T,
+    ) -> u64 {
+        let before = unevictable_kb(memory_stat);
         let _held = fault();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         loop {
-            let gain = unevictable_kb().saturating_sub(before);
+            let gain = unevictable_kb(memory_stat).saturating_sub(before);
             if gain >= want || std::time::Instant::now() >= deadline {
                 return gain;
             }
@@ -615,11 +679,25 @@ mod tests {
         }
     }
 
-    /// (region, its gain, the control's gain) in kB: `memfd_secret` pages
-    /// against as many ordinary anonymous ones. `None` when RLIMIT_MEMLOCK,
-    /// which bounds `memfd_secret` memory, leaves no room for 1 MiB.
+    /// (region, its gain, the control's gain) in kB, and the counter read:
+    /// `memfd_secret` pages against as many ordinary anonymous ones. `None`
+    /// when RLIMIT_MEMLOCK, which bounds `memfd_secret` memory, leaves no room
+    /// for 1 MiB.
     #[cfg(target_os = "linux")]
-    fn secretmem_and_ordinary_gains() -> Option<(u64, u64, u64)> {
+    fn secretmem_and_ordinary_gains() -> Option<(u64, u64, u64, String)> {
+        // make ci's three test profiles share one container and may run this test at
+        // once: copies started 1 s apart failed their control (2026-11-06). One at a time.
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(std::env::temp_dir().join("x0ne-infer-unevictable.lock"))
+            .expect("the lock file of the Unevictable measure");
+        lock.lock().expect("lock the Unevictable measure");
+        let stat = own_memory_stat();
+        let counter = stat
+            .as_deref()
+            .map_or("/proc/meminfo".into(), |p| p.display().to_string());
+        let stat = stat.as_deref();
         let mut lim = libc::rlimit {
             rlim_cur: 0,
             rlim_max: 0,
@@ -647,21 +725,22 @@ mod tests {
             );
             assert_ne!(p, libc::MAP_FAILED);
             let region = std::slice::from_raw_parts_mut(p.cast::<u8>(), len);
-            let gain = unevictable_gain(want, || write_zeros(region));
+            let gain = unevictable_gain(stat, want, || write_zeros(region));
             libc::munmap(p, len);
             gain
         };
         // Its pages are written when it is made (`fault_in`), then once more.
-        let secret = unevictable_gain(want, || {
+        let secret = unevictable_gain(stat, want, || {
             let mut s = SecretBytes::with_backing(len, Backing::SecretMem).expect("memfd_secret");
             write_zeros(s.expose_mut());
             s
         });
-        Some((want, secret, control))
+        drop(lock);
+        Some((want, secret, control, counter))
     }
 
     /// Linux: out of swap and core dumps, not inherited by a fork; in
-    /// `memfd_secret` memory where the kernel offers it.
+    /// `memfd_secret` memory wherever the kernel gives this process some.
     #[cfg(target_os = "linux")]
     #[test]
     fn on_linux_the_secret_is_unevictable_undumped_and_not_inherited() {
@@ -669,29 +748,41 @@ mod tests {
         let block = vma_of(s.expose().as_ptr() as usize);
         let flags = vm_flags(&block);
         let has = |f: &str| flags.iter().any(|x| x == f);
-        assert!(has("dd"), "{:?}: {block}", s.backing());
-        match s.backing() {
-            Backing::SecretMem => {
-                assert!(block.contains("secretmem"), "{block}");
-                assert!(has("dc"), "{block}");
-                // No VM_LOCKED ("lo") since 97d34aa65c29 (6.12.115, 2026-11-05): the
-                // pages stay unevictable, which is what keeps them out of swap.
+        match kernel_offers_memfd_secret() {
+            Ok(()) => {
+                let why = SecretBytes::with_backing(32, Backing::SecretMem).err();
+                assert_eq!(s.backing(), Backing::SecretMem, "memfd_secret: {why:?}");
+                assert_eq!(mapped_file(&block), "/secretmem (deleted)", "{block}");
+                // dd: the kernel's VM_DONTDUMP; dc: our MADV_DONTFORK.
+                assert!(has("dd") && has("dc"), "{block}");
+                // No VM_LOCKED ("lo") since 97d34aa65c29 (stable 6.12.113; 6.12.115, 2026-11-05):
+                // the pages stay unevictable, which is what keeps them out of swap.
                 match secretmem_and_ordinary_gains() {
-                    Some((len, secret, control)) => {
-                        assert!(control < len / 4, "control: {control} of {len} kB");
-                        assert!(secret >= len * 3 / 4, "{secret} of {len} kB: {block}");
+                    Some((len, secret, control, counter)) => {
+                        assert!(
+                            control < len / 4,
+                            "control: {control} of {len} kB, {counter}"
+                        );
+                        assert!(
+                            secret >= len * 3 / 4,
+                            "{secret} of {len} kB, {counter}: {block}"
+                        );
                     }
-                    None => assert!(has("lo"), "no room to measure, no VM_LOCKED: {block}"),
+                    None => assert!(
+                        has("lo"),
+                        "RLIMIT_MEMLOCK leaves no room to measure that the pages are \
+                         unevictable, and this kernel does not mark them VM_LOCKED: {block}"
+                    ),
                 }
             }
-            Backing::Locked => assert!(has("lo") && has("wf"), "{block}"),
-            Backing::Heap => panic!("Linux must not fall back to the heap"),
+            Err(e) => {
+                eprintln!("memfd_secret refused here ({e}): the key must be in mlock memory");
+                assert_eq!(s.backing(), Backing::Locked, "{block}");
+                assert_locked_flags(&block);
+            }
         }
         let locked = SecretBytes::with_backing(32, Backing::Locked).unwrap();
-        let flags = vm_flags(&vma_of(locked.expose().as_ptr() as usize));
-        for f in ["lo", "dd", "wf"] {
-            assert!(flags.iter().any(|x| x == f), "Locked lacks {f}: {flags:?}");
-        }
+        assert_locked_flags(&vma_of(locked.expose().as_ptr() as usize));
     }
 
     /// `memfd_secret` pages are out of the kernel's direct map: not even this
@@ -704,8 +795,11 @@ mod tests {
         let mut s = match SecretBytes::with_backing(32, Backing::SecretMem) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("memfd_secret unavailable here ({e}): nothing to read");
-                return;
+                if let Err(refused) = kernel_offers_memfd_secret() {
+                    eprintln!("memfd_secret refused here ({refused}): nothing to read");
+                    return;
+                }
+                panic!("the kernel offers memfd_secret, SecretBytes failed with it: {e}");
             }
         };
         s.expose_mut().copy_from_slice(&[0x5a; 32]);

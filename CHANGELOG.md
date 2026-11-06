@@ -125,6 +125,17 @@ history: candle has been the CPU reference of the tests since 2026-11-04.
 
 ### Changes, newest first
 
+- The `memfd_secret` tests no longer pass on the `mlock` fallback where the
+  kernel offers `memfd_secret` (2026-11-06). They ask the kernel for a
+  descriptor themselves: where it gives one, a key in `mlock` memory fails,
+  as does a mapping other than `/secretmem (deleted)` (an ordinary memfd
+  named `secretmem` maps as `/memfd:secretmem (deleted)`), and the
+  `/proc/self/mem` test no longer returns early. A `SecretBytes` that never
+  called `memfd_secret` passed both before. The `Unevictable` measure reads
+  the test's cgroup v2 `memory.stat` where it has one, else `/proc/meminfo`,
+  and holds a lock file in the temporary directory: copies started 1 s
+  apart counted each other's pages, in two containers through
+  `/proc/meminfo` and in one, as `make ci`'s three test profiles share it.
 - `SecretBytes` writes its `memfd_secret` pages when it is made, by
   `read(2)` from `/dev/zero` (2026-11-06). A kernel with Linux commit
   97d34aa65c29 counts them against the user's `RLIMIT_MEMLOCK` at that first
