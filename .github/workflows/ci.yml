@@ -265,11 +265,12 @@ jobs:
   # image. They fake podman, df, pgrep, jq and logger: bash, coreutils, git
   # and jq are all they need on the runner. strip-release.sh and deb-verify.sh
   # also need cc, binutils, perl and dpkg-deb, and skip without them here
-  # (X0NE_REQUIRE_CI_TOOLS is set in the CI image only).
+  # (X0NE_REQUIRE_CI_TOOLS is set in the CI image only). Then the installer's
+  # tests (make install-check), which need curl, openssl, python3 and docker.
   ci-scripts:
     name: ci-scripts
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 25
     permissions:
       contents: read
     env:
@@ -295,3 +296,18 @@ jobs:
         env:
           X0NE_REQUIRE_CI_TOOLS: 1
         run: python3 -I ci/features.py --check && bash ci/tests/features.sh
+      # The installer as users run it: POSIX syntax, shellcheck (on the runner image),
+      # then ci/tests/installer.sh against fake releases on 127.0.0.1, here (Ubuntu
+      # 24.04) and in Debian 13, Ubuntu 24.04, Fedora 43 and Alpine 3 containers.
+      - name: install.sh syntax and shellcheck
+        run: |
+          sh -n install.sh
+          shellcheck --version | sed -n 2p
+          shellcheck --shell=sh install.sh ci/tests/installer.sh
+          shellcheck ci/install-matrix.sh ci/deb-pack.sh ci/tests/deb-pack.sh
+      - name: install.sh tests
+        run: sh ci/tests/installer.sh
+      - name: install.sh tests in four distributions
+        env:
+          CONTAINER: docker
+        run: bash ci/install-matrix.sh

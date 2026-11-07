@@ -4,7 +4,8 @@
 # fake `gh api` that answers the two calls from canned JSON and applies --jq
 # with jq, as gh does. Four tags: signed and verified (accepted), annotated but
 # unsigned, lightweight, tag object without .verification (each refused with
-# exit 1, not a jq error). Run by ci/inside.sh (step ci-sh) or by hand:
+# exit 1, not a jq error). Then the step "install.sh installs the tag's version": the
+# tag of install.sh's VERSION passes, another fails. Run by ci/inside.sh (step ci-sh) or by hand:
 # bash ci/tests/release-verify-tag.sh. Needs jq; without it the test says so and skips,
 # unless X0NE_REQUIRE_JQ is set (ci/inside.sh does: the CI image ships jq), then it fails.
 set -euo pipefail
@@ -76,5 +77,26 @@ case_run lightweight '{"ref":"refs/tags/v9.9.9","object":{"type":"commit","sha":
 case_run no-verification "$ANNOTATED" '{"sha":"a1","tag":"v9.9.9"}' \
   1 '::error::v9.9.9 is not signed by a verified key'
 
+# The step "install.sh installs the tag's version", read from the file too, run in a copy
+# of the tree's install.sh: its own VERSION is accepted, another tag is refused.
+STEP2="install.sh installs the tag's version"
+awk -v name="$STEP2" '
+  index($0, "- name: " name) { found = 1; next }
+  found && /^ *run: \|/ { inrun = 1; next }
+  inrun && /^ *- (name|uses):/ { exit }
+  inrun && /^  [a-z]/ { exit }
+  inrun { print }
+' "$WF" | sed 's/^          //' > "$T/step2.sh"
+grep -q 'install.sh' "$T/step2.sh" || { echo "FAIL  step \"$STEP2\" not found in $WF"; exit 1; }
+mkdir -p "$T/tree"; cp "$SRC/install.sh" "$T/tree/"
+v=$(sed -n 's/^VERSION="\(.*\)"$/\1/p' "$SRC/install.sh")
+[ -n "$v" ] || { echo "FAIL  install.sh has no VERSION= line"; exit 1; }
+for want in "v$v:0" "v9.9.9:1"; do
+  tag=${want%:*} rc=0
+  out=$(cd "$T/tree" && env -i PATH=/usr/bin:/bin TAG="$tag" bash -e "$T/step2.sh" 2>&1) || rc=$?
+  if [ "$rc" = "${want##*:}" ]; then pass "install.sh VERSION $v, tag $tag: exit $rc${out:+ ($out)}"
+  else fail "install.sh-version-$tag" "exit $rc, expected ${want##*:}: $out"; fi
+done
+
 [ "$FAILS" -eq 0 ] || { echo "$FAILS failure(s)"; exit 1; }
-echo "release-verify-tag: 4 ok"
+echo "release-verify-tag: 6 ok"

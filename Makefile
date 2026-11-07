@@ -1,6 +1,6 @@
 # x0ne-Engine: every target runs in a container (ci/). `make help` lists them.
 .DEFAULT_GOAL := help
-.PHONY: help ci ci-image ci-refresh ci-status deb deb-repro deb-check deb-status repro-compare run-fixtures sdk-wasm e2e-local core-gpu install-hooks
+.PHONY: help ci ci-image ci-refresh ci-status deb deb-repro deb-check deb-status install-check repro-compare run-fixtures sdk-wasm e2e-local core-gpu install-hooks
 
 help: ## This list
 	@grep -hE '^[a-z][a-z0-9-]*:.*## ' $(MAKEFILE_LIST) | sed 's/:.*## /\t/' | column -t -s "$$(printf '\t')"
@@ -28,6 +28,9 @@ deb-check: ## dpkg -i the staged x0ne-engine .deb in a trixie container (no netw
 
 deb-status: ## Last deb verdict
 	ci/ci.sh deb-status
+
+install-check: ## install.sh against fake releases on local HTTPS, in Debian 13, Ubuntu 24.04, Fedora 43 and Alpine containers (no network), + shellcheck (ci/install-matrix.sh: ENGINE_ARCHIVE, ENGINE_DEB, CI_CGROUP_PARENT)
+	ci/install-matrix.sh
 
 repro-compare: ## Two build trees of one commit, from two environments, byte for byte: A=<dir> B=<dir> [JSON=<report>, default out/repro/compare.json]
 	@mkdir -p out/repro; ci/repro-compare.sh "$(A)" "$(B)" --json "$(or $(JSON),out/repro/compare.json)"
