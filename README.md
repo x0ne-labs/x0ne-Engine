@@ -302,7 +302,8 @@ Other platforms build from source, below.
 ## Quick start
 
 Replayed on Debian 13 (trixie) in a fresh `debian:trixie-slim` container, as
-an ordinary user: the first block with the network, the second without.
+an ordinary user (the image has no `sudo`: the `apt-get` line ran as root):
+the first block with the network, the second without.
 
 ```sh
 sudo apt-get update && sudo apt-get install build-essential pkg-config git curl ca-certificates perl
@@ -327,19 +328,26 @@ target/release/x0ne-engine catalog
 
 What to expect:
 
-- `cargo test` passes 1355 tests and ignores 33 (they need model files, a
-  CUDA device or a wasm build, or print timings). No TEE, GPU, CUDA toolkit
+- `cargo test` passes 1374 tests and ignores 32 (they need model files, a
+  CUDA device or a wasm build, or print timings), measured on 2026-11-07 in
+  that container on Linux 6.12.115. No TEE, GPU, CUDA toolkit
   or network is needed: x0ne Core builds with the `cuda` feature only.
   `perl` with its `Digest::SHA` is needed (`scripts/pin-archive-key.sh` and
   `scripts/pin-transparency-log.sh` run in the tests). The two blocks fill
-  about 15.6 GiB of `target/` (measured on 2026-11-04 in the CI image,
-  Debian 12, which sets `CARGO_INCREMENTAL=0`).
+  about 19 GiB of `target/` with Cargo's defaults (2026-11-07, same
+  container), 15.6 GiB in the CI image (2026-11-04, Debian 12, which sets
+  `CARGO_INCREMENTAL=0`).
 - `x0ne-infer` refuses to start outside a verified TEE and exits 87: this
   version's measurements file has TEST provenance, which a release build
   refuses first ([docs/running.md](docs/running.md)).
 - `x0ne-engine catalog` lists the five models a session can serve, all
   Qwen3: `qwen3:0.6b`, `qwen3:1.7b`, `qwen3:8b`, `qwen3:14b` and
   `qwen3:32b`.
+- `x0ne-engine cloud …` needs a fourth binary next to `x0ne-engine`,
+  `x0ne-engine-cloud`, which the release archive and the `.deb` carry. From
+  source: `cargo build --locked --release -p x0ne-engine-cloud --bin
+  x0ne-engine-cloud`. Without it, the command exits 91 and says where it
+  looked.
 - The binaries keep their symbols and line tables: `x0ne-infer` is about
   89.6 MB, measured in the CI image (Debian 12).
   `ci/strip-release.sh <debug dir> <binary>...` moves them to debug files
