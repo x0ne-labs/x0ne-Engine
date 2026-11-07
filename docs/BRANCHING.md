@@ -40,7 +40,8 @@ pull request, squash-merged.
 `y` may break compatibility, a new `z` does not. One version for the whole
 workspace; tag `vX.Y.Z` equals it. Pre-releases: `-alpha.N`, `-beta.N`, `-rc.N`.
 
-1. Branch `chore/release-X.Y.Z` from `main`; `cargo release version X.Y.Z --execute`.
+1. Branch `chore/release-X-Y-Z` from `main` (`scripts/check-branch-name.sh`
+   refuses dots: `chore/release-0-2-0-beta-7`); `cargo release version X.Y.Z --execute`.
    Set `VERSION="X.Y.Z"` in `install.sh`, `Version: X.Y.Z` (Debian form:
    `0.2.0-beta.7` gives `0.2.0~beta.7`) in `ci/deb/x0ne-engine.ctl`, and the
    tag in the README's Install section: the release workflow refuses a tag
@@ -53,10 +54,13 @@ workspace; tag `vX.Y.Z` equals it. Pre-releases: `-alpha.N`, `-beta.N`, `-rc.N`.
 3. Pull request `chore: release vX.Y.Z`; squash-merge on green CI.
 4. On the updated `main`: `git tag -s vX.Y.Z -m vX.Y.Z && git tag -v vX.Y.Z`.
 5. `git push origin refs/tags/vX.Y.Z`; the release workflow builds, checksums
-   and attests the artifacts, installs the archive with `install.sh` and the
-   `.deb` with `dpkg` in four distributions, then drafts the release.
-6. Paste the `CHANGELOG.md` section into the GitHub release notes; check the
-   artifacts download and verify.
+   and attests the artifacts, installs the archive with `install.sh` in
+   Debian 13, Ubuntu 24.04 and Fedora 43 (refused on Alpine 3) and the `.deb`
+   with `dpkg` in Debian 13 and Ubuntu 24.04, then drafts the release.
+6. The draft's notes are the `CHANGELOG.md` section, or a link to it when the
+   section is over the 125,000 characters GitHub takes; edit them if needed
+   (`gh release edit --notes-file`), check the artifacts download and verify,
+   then publish.
 
 ## Vulnerabilities
 
