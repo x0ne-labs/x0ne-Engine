@@ -88,13 +88,15 @@ workspace; tag `vX.Y.Z` equals it. Pre-releases: `-alpha.N`, `-beta.N`, `-rc.N`.
    `--source-ref` case-insensitively
    ([GHSA-wjmr-j3rp-mh2g](https://github.com/cli/cli/security/advisories/GHSA-wjmr-j3rp-mh2g),
    [GHSA-4mq3-hpgx-9cx8](https://github.com/cli/cli/security/advisories/GHSA-4mq3-hpgx-9cx8)).
-   On the maintainer's machine, in a checkout of the tag:
+   On the maintainer's machine, in a checkout of the tag, whose `install.sh`
+   names the repository (`REPO=`) and the key (`ALLOWED_SIGNER=`):
 
    ```sh
    (
      set -eu
      tag=vX.Y.Z
-     repo=x0ne-labs/x0ne-Engine
+     repo=$(sed -n 's/^REPO="\(.*\)"$/\1/p' install.sh)
+     test -n "$repo"
      gh --version | awk 'NR == 1 { split($3, v, "."); ok = v[1] + 0 > 2 || (v[1] + 0 == 2 && v[2] + 0 >= 102) } END { exit !ok }' ||
        { echo "gh 2.102.0 or later is required" >&2; exit 1; }
      commit=$(git rev-parse --verify "$tag^{commit}")
