@@ -248,6 +248,12 @@ jobs:
             on && /^## / {exit}
             on {print}' CHANGELOG.md > notes.md
           [ -s notes.md ] || echo "See CHANGELOG.md." > notes.md
+          # GitHub refuses a body over 125,000 characters, and no draft is made: the
+          # 0.2.0-beta.7 section was 125,589 (2026-11-07). Bytes bound characters.
+          if [ "$(wc -c < notes.md)" -gt 125000 ]; then
+            printf 'The notes of %s are longer than a GitHub release takes: section %s of [CHANGELOG.md](https://github.com/%s/blob/%s/CHANGELOG.md).\n' \
+              "$TAG" "$version" "$GITHUB_REPOSITORY" "$TAG" > notes.md
+          fi
           pre=""
           case "$TAG" in *-*) pre="--prerelease" ;; esac
           gh release create "$TAG" --draft --verify-tag $pre \

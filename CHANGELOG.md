@@ -147,6 +147,12 @@ history: candle has been the CPU reference of the tests since 2026-11-04.
 
 ### Changes, newest first
 
+- The draft release's notes are a link to the tag's `CHANGELOG.md` when the
+  version's section is over 125,000 bytes (2026-11-07). GitHub refuses a
+  longer release body, and the release job then failed after the
+  attestation, with no draft: this section was 125,589 characters on
+  2026-11-07. `ci/tests/release-notes.sh` replays the step with a fake `gh`
+  (in `ci-sh`): this CHANGELOG, a short section, one over the cap, none.
 - A `memfd_secret` key is tested against `process_vm_readv(2)` as well as
   `/proc/self/mem` (2026-11-07): the read fails with EFAULT, while a heap
   buffer, the control, reads back. Measured on 6.12.115; with the key on an

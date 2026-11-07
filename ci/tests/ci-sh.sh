@@ -519,10 +519,10 @@ if [ "$rc" = 2 ]; then pass "clippy-pedantic refuses a missing file"; else fail 
 if bash "$SRC/ci/tests/repro-compare.sh" > "$T/repro-compare.log" 2>&1; then pass "repro-compare: $(tail -n 1 "$T/repro-compare.log")"
 else fail "repro-compare" "$(grep FAIL "$T/repro-compare.log" | tr '\n' ' ')"; fi
 
-# ---- strip-release, deb-verify, deb-pack, release-guards: the strip of the shipped binaries, the
+# ---- strip-release, deb-verify, deb-pack, release-guards, release-notes: the strip of the shipped binaries, the
 # check of the .deb, the .deb of a GitHub release, the build environment and the release refusal
-# of x0ne-infer (their own cases).
-for t in strip-release deb-verify deb-pack release-guards; do
+# of x0ne-infer, the release notes under GitHub's cap (their own cases).
+for t in strip-release deb-verify deb-pack release-guards release-notes; do
   if bash "$SRC/ci/tests/$t.sh" > "$T/$t.log" 2>&1; then pass "$t: $(tail -n 1 "$T/$t.log")"
   else fail "$t" "$(grep FAIL "$T/$t.log" | tr '\n' ' ')"; fi
 done
