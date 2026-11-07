@@ -30,3 +30,4 @@ end-to-end	x0ne-infer/tests/VENDORED.md	own test Google (`gce_endorsement::tests
 end-to-end	docs/model-key.md	This document does not make the cloud session > end-to-end confidential	a negation
 end-to-end	README.md	x0ne Engine is not end-to-end confidential yet, and the cloud	a negation
 end-to-end	bench/results/2026-11-04-h100-tdx-cc-core-e2e/README.md	x0ne Engine is not end-to-end confidential yet.	a negation, the README's
+end-to-end	README.md	Installing the client changes nothing in [Status](#status): x0ne Engine is not end-to-end confidential yet.	a negation, in the Install section, that points to Status
