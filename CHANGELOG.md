@@ -13,18 +13,28 @@ this section; the others landed until 2026-11-07.
 ### Added
 
 - `install.sh` installs the client binaries of a GitHub release
-  (2026-11-07), with the contract of x0ne-Harness's installer: Linux x86_64
-  with glibc only, the archive and `SHA256SUMS` over https only, refused on
-  a missing or mismatching checksum, `gh attestation verify` when gh 2.56+
-  is logged in, `~/.local/bin`, no sudo, no other request. It installs the
-  release on its `VERSION` line (GitHub's `releases/latest` skips
-  pre-releases), takes `--version`, and runs the new `x0ne-engine` before
-  it replaces anything. `make install-check` tests it against fake releases
-  in Debian 13, Ubuntu 24.04, Fedora 43 and Alpine 3 containers
+  (2026-11-07), adapted from x0ne-Harness's installer: Linux x86_64 with
+  glibc only, over https only, `~/.local/bin`, no sudo, no other request.
+  It verifies `SHA256SUMS.sig`, the maintainer's SSH signature of
+  `SHA256SUMS`, with `ssh-keygen -Y verify` (OpenSSH 8.1+) against the key
+  written in the script, before it downloads the archive (2026-11-07); it
+  refuses a missing or invalid signature, a missing or older `ssh-keygen`,
+  and a signed list whose first line names another release. No variable or
+  option changes the key or skips the check. Then it refuses a missing or
+  mismatching checksum, and runs `gh attestation verify` when gh 2.56+ is
+  logged in, refused on failure. It installs the release on its `VERSION`
+  line (GitHub's `releases/latest` skips pre-releases), takes `--version`,
+  and runs the new `x0ne-engine` before it replaces anything.
+  `make install-check` tests it against fake releases signed with a test
+  key, in Debian 13, Ubuntu 24.04, Fedora 43 and Alpine 3 containers
   (`ci/tests/installer.sh`, `ci/install-matrix.sh`), and so does the
-  `ci-scripts` job.
+  `ci-scripts` job; the same test replays the README's `.deb` steps, which
+  stop at the first failed check, before `dpkg`.
 - The release workflow attaches `x0ne-engine_amd64.deb` and `install.sh`,
-  both in `SHA256SUMS` and attested (2026-11-07). The `.deb` ships the
+  both in `SHA256SUMS` and attested (2026-11-07); `SHA256SUMS` starts with
+  `# <repository> <tag>`, and the maintainer signs it and uploads
+  `SHA256SUMS.sig` to the draft before publishing it (`docs/BRANCHING.md`,
+  2026-11-07). The `.deb` ships the
   archive's three binaries (`ci/deb-pack.sh`: the fields of
   `ci/deb/x0ne-engine.ctl`, dpkg-deb, every date at `SOURCE_DATE_EPOCH`;
   `ci/deb-verify.sh` checks it); the two builds must give the same `.deb`.

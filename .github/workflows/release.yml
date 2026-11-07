@@ -5,11 +5,14 @@ name: Release
 # .deb with dpkg in four distributions, then attach binaries (stripped, as in
 # the .deb), their debug files, the .deb, install.sh, SHA256SUMS and the
 # CycloneDX SBOMs to a DRAFT release with SLSA provenance. A maintainer
-# reviews and publishes the draft by hand. Nothing goes to crates.io.
+# reviews the draft, signs SHA256SUMS with the release key and uploads
+# SHA256SUMS.sig (docs/BRANCHING.md), then publishes it by hand: install.sh
+# and the README refuse a release without it. Nothing goes to crates.io.
 #
 # Assets (names are stable; install.sh and the README depend on them):
 #   x0ne-engine-x86_64-unknown-linux-gnu.tar.gz        x0ne-engine-x86_64-unknown-linux-gnu-debug.tar.gz
 #   x0ne-engine_amd64.deb   install.sh   SHA256SUMS   *.cdx.json
+#   SHA256SUMS.sig (uploaded by the maintainer)
 # The archive holds one directory, x0ne-engine-<target>/: x0ne-engine,
 # x0ne-engine-cloud, x0ne-engine-proxy, LICENSE, LICENSING.md, NOTICE and
 # THIRD_PARTY_LICENSES.html. The .deb name carries no version: GitHub rewrites
@@ -219,12 +222,15 @@ jobs:
           name: dist-first
           path: dist
       - name: SHA256SUMS
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           rm dist/binaries.sha256
           # The installer of the tagged commit is an asset too: checksummed and attested.
           cp install.sh dist/install.sh
-          (cd dist && sha256sum -- *.tar.gz *.deb *.cdx.json install.sh > SHA256SUMS && sha256sum -c SHA256SUMS)
+          # First line "# <repository> <tag>": install.sh refuses a signed list of another release.
+          (cd dist && { printf '# %s %s\n' "$GITHUB_REPOSITORY" "$TAG"; sha256sum -- *.tar.gz *.deb *.cdx.json install.sh; } > SHA256SUMS && sha256sum -c SHA256SUMS)
       # Verify with: gh attestation verify <file> --repo <owner>/x0ne-Engine
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:

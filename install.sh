@@ -14,11 +14,13 @@
 #   X0NE_ENGINE_RELEASES_URL  releases base URL, for a mirror (https only); default: GitHub
 #
 # Linux x86_64 with the glibc loader only: the release workflow builds no other
-# target. It downloads the archive and SHA256SUMS of the release, refuses on a
-# missing or mismatching checksum, verifies the build provenance with
-# `gh attestation verify` when gh 2.56+ is logged in (else it says so), runs the
-# new x0ne-engine once, then moves three binaries into the install directory.
-# No sudo, no telemetry: the only requests are the two downloads, plus gh's own
+# target. It downloads SHA256SUMS and SHA256SUMS.sig, verifies the signature with
+# `ssh-keygen -Y verify` against the release key below, and refuses unless the
+# list names the release asked for. Only then it downloads the archive, refuses
+# on a missing or mismatching checksum, and, when gh 2.56+ is logged in, also
+# verifies the build provenance with `gh attestation verify`. It runs the new
+# x0ne-engine once, then moves three binaries into the install directory.
+# No sudo, no telemetry: the only requests are the three downloads, plus gh's own
 # when it verifies. It never edits a shell startup file.
 
 set -eu
@@ -31,6 +33,12 @@ RELEASES_URL="${X0NE_ENGINE_RELEASES_URL:-https://github.com/${REPO}/releases}"
 INSTALL_DIR="${X0NE_ENGINE_INSTALL_DIR:-${HOME}/.local/bin}"
 BINS="x0ne-engine x0ne-engine-cloud x0ne-engine-proxy"
 LOADER="/lib64/ld-linux-x86-64.so.2"
+# The release key, the maintainer's SSH key (SHA256:+8onkVcMPL3D/8vOL/xn5TrHLGWNYOKWbWIMwM+BPtE).
+# SHA256SUMS.sig is its signature of SHA256SUMS, namespace x0ne-engine-release.
+# Written here only: no variable or option replaces it or skips the check.
+SIGNER="dev@x0ne.co"
+NAMESPACE="x0ne-engine-release"
+ALLOWED_SIGNER='dev@x0ne.co namespaces="x0ne-engine-release" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICYdHwVN3y1azWxmVmm7sMQOI/BJGN2YI7qpGiQ0+4/Y'
 
 say() { printf '%s\n' "$*"; }
 die() {
@@ -84,11 +92,15 @@ detect_tools() {
     else
         die "sha256sum or shasum is required to verify the download"
     fi
+    command -v ssh-keygen >/dev/null 2>&1 ||
+        die "ssh-keygen is required to verify the release signature: install OpenSSH 8.1 or later (Debian and Ubuntu: openssh-client; Fedora: openssh; Alpine: openssh-keygen), then run this script again"
+    # -Y verify came with OpenSSH 8.1; its usage text names it (8.0's does not).
+    ssh-keygen -Y 2>&1 | grep -q -e '-Y verify' ||
+        die "this ssh-keygen cannot verify signatures (no 'ssh-keygen -Y verify'): install OpenSSH 8.1 or later, then run this script again"
 }
 
 # fetch <url> <file>: fails on any HTTP error, and on any URL or redirect
-# that is not https: the checksum comes from the same place as the archive.
-# Prints the last HTTP status, 000 when no response came back.
+# that is not https. Prints the last HTTP status, 000 when no response came back.
 fetch() {
     curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL -w '%{http_code}' "$1" -o "$2"
 }
@@ -111,16 +123,46 @@ release_url() {
     printf '%s/download/%s/%s' "$RELEASES_URL" "$TAG" "$1"
 }
 
-download() {
+# The checksum list and its signature come first: nothing else is fetched,
+# read, extracted or run before the signature verifies.
+download_sums() {
+    say "Downloading $(release_url SHA256SUMS)"
+    if ! status=$(fetch "$(release_url SHA256SUMS)" "${TMP}/SHA256SUMS"); then
+        if [ "$status" = 404 ]; then
+            die "no SHA256SUMS for ${TAG}: this release is not published, or this version does not exist. Nothing was installed. Build from source instead: README.md in https://github.com/${REPO}"
+        fi
+        die "download of SHA256SUMS failed (HTTP status ${status:-000})"
+    fi
+    if ! status=$(fetch "$(release_url SHA256SUMS.sig)" "${TMP}/SHA256SUMS.sig"); then
+        if [ "$status" = 404 ]; then
+            die "no SHA256SUMS.sig for ${TAG}: refusing a release without the maintainer's signature. Nothing was installed. Please report it: https://github.com/${REPO}/security"
+        fi
+        die "download of SHA256SUMS.sig failed (HTTP status ${status:-000})"
+    fi
+}
+
+# The first line of the signed list names the release: an older list, signed
+# too, served under this tag's URL is refused.
+verify_signature() {
+    printf '%s\n' "$ALLOWED_SIGNER" >"${TMP}/allowed_signers"
+    if ! out=$(ssh-keygen -Y verify -f "${TMP}/allowed_signers" -I "$SIGNER" -n "$NAMESPACE" \
+        -s "${TMP}/SHA256SUMS.sig" <"${TMP}/SHA256SUMS" 2>&1); then
+        die "signature verification FAILED: SHA256SUMS of ${TAG} is not signed by the release key (${out:-no output}). Nothing was installed."
+    fi
+    say "Signature verified: ${out}"
+    first=$(awk 'NR == 1 { print; exit }' "${TMP}/SHA256SUMS")
+    [ "$first" = "# ${REPO} ${TAG}" ] ||
+        die "the signed SHA256SUMS is not the list of ${TAG}: its first line is '${first}', not '# ${REPO} ${TAG}'. Nothing was installed."
+}
+
+download_archive() {
     say "Downloading $(release_url "$ASSET")"
     if ! status=$(fetch "$(release_url "$ASSET")" "${TMP}/${ASSET}"); then
         if [ "$status" = 404 ]; then
-            die "no release archive for ${TARGET} (${TAG}): this release is not published, or has no archive for this platform. Build from source instead: README.md in https://github.com/${REPO}"
+            die "no release archive for ${TARGET} (${TAG}): this release has no archive for this platform. Build from source instead: README.md in https://github.com/${REPO}"
         fi
         die "download failed (HTTP status ${status:-000})"
     fi
-    fetch "$(release_url SHA256SUMS)" "${TMP}/SHA256SUMS" >/dev/null ||
-        die "no SHA256SUMS for this release: refusing to install an unverified archive"
 }
 
 verify_checksum() {
@@ -160,15 +202,13 @@ gh_unusable() {
     gh auth status >/dev/null 2>&1 || say "gh is not logged in (gh auth login)"
 }
 
-# The checksum only proves the download intact; the attestation proves the
-# release workflow built it from the tagged source. A gh that cannot verify
+# An extra check on top of the signature: the attestation says the release
+# workflow built the archive from the tagged source. A gh that cannot verify
 # counts as no gh; a gh that verifies and fails stops the install.
 verify_provenance() {
     why=$(gh_unusable)
     if [ -n "$why" ]; then
-        say "Provenance NOT verified: ${why}."
-        say "Only the SHA-256 checksum was checked, against a SHA256SUMS from the same server."
-        say "To verify a release by hand: https://github.com/${REPO}#verify-a-release-by-hand"
+        say "Build provenance not checked: ${why}. The signed SHA256SUMS is the check."
         return 0
     fi
     gh attestation verify "${TMP}/${ASSET}" --repo "$REPO" \
@@ -270,7 +310,9 @@ main() {
     TMP=$(mktemp -d)
     trap 'rm -rf "$TMP"; unstage' EXIT
     trap 'exit 130' INT TERM
-    download
+    download_sums
+    verify_signature
+    download_archive
     verify_checksum
     verify_provenance
     install_files

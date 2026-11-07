@@ -33,6 +33,7 @@ pull request, squash-merged.
   (`codeql`), as each workflow's header says. No job runs `cargo audit`.
 - Ordinary commits are not signed. The first public commit and every release
   tag are signed by the maintainer (SSH key); check with `git tag -v vX.Y.Z`.
+  The same key signs each release's `SHA256SUMS` (step 7 below).
 
 ## Versions and releases
 
@@ -59,8 +60,31 @@ workspace; tag `vX.Y.Z` equals it. Pre-releases: `-alpha.N`, `-beta.N`, `-rc.N`.
    with `dpkg` in Debian 13 and Ubuntu 24.04, then drafts the release.
 6. The draft's notes are the `CHANGELOG.md` section, or a link to it when the
    section is over the 125,000 characters GitHub takes; edit them if needed
-   (`gh release edit --notes-file`), check the artifacts download and verify,
-   then publish.
+   (`gh release edit --notes-file`), and check the artifacts download and verify.
+7. Sign the checksum list with the release key, the one that signs the tag
+   (`install.sh` pins its public half), and upload the signature to the draft.
+   `install.sh` and the README's `.deb` steps refuse a release without
+   `SHA256SUMS.sig`. On the maintainer's machine, in a new directory:
+
+   ```sh
+   gh release download vX.Y.Z --repo x0ne-labs/x0ne-Engine --pattern SHA256SUMS &&
+   test "$(head -n 1 SHA256SUMS)" = "# x0ne-labs/x0ne-Engine vX.Y.Z" &&
+   ssh-keygen -Y sign -f ~/.ssh/x0ne_signing -n x0ne-engine-release SHA256SUMS &&
+   gh release upload vX.Y.Z SHA256SUMS.sig --repo x0ne-labs/x0ne-Engine
+   ```
+
+   Then download both back from the draft into another new directory and
+   verify them against the key of `install.sh`, as the script does
+   (`<tree>`: a checkout of the tag):
+
+   ```sh
+   gh release download vX.Y.Z --repo x0ne-labs/x0ne-Engine --pattern SHA256SUMS --pattern SHA256SUMS.sig &&
+   sed -n "s/^ALLOWED_SIGNER='\(.*\)'\$/\1/p" <tree>/install.sh > allowed_signers &&
+   ssh-keygen -Y verify -f allowed_signers -I dev@x0ne.co -n x0ne-engine-release -s SHA256SUMS.sig < SHA256SUMS
+   ```
+
+   It prints `Good "x0ne-engine-release" signature for dev@x0ne.co`.
+8. Publish the draft.
 
 ## Vulnerabilities
 

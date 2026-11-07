@@ -250,15 +250,23 @@ Fedora 43 and Alpine 3 containers. What the script does, and nothing else:
   (`curl ... | sh -s -- --version <v>`);
 - stops before any download on an OS other than Linux, a CPU other than
   x86_64, or a system without the glibc loader (Alpine, musl);
-- downloads `x0ne-engine-x86_64-unknown-linux-gnu.tar.gz` and `SHA256SUMS`
-  from the release, with curl, over https only: an http mirror or a
-  redirect to http is refused. It makes no other request;
-- refuses to install if `SHA256SUMS` is missing, if the archive is not
-  listed in it, or if its SHA-256 differs;
-- if the GitHub CLI 2.56 or later is installed and logged in, runs
+- downloads `SHA256SUMS` and `SHA256SUMS.sig` from the release, then
+  `x0ne-engine-x86_64-unknown-linux-gnu.tar.gz`, with curl, over https
+  only: an http mirror or a redirect to http is refused. It makes no other
+  request;
+- verifies `SHA256SUMS.sig` with `ssh-keygen -Y verify` (OpenSSH 8.1 or
+  later) against the release key written in the script: the maintainer's
+  SSH key, `SHA256:+8onkVcMPL3D/8vOL/xn5TrHLGWNYOKWbWIMwM+BPtE`, which
+  signs the release tags too. It refuses if the signature is missing or
+  does not verify, if `ssh-keygen` is missing or older than 8.1, or if the
+  first line of `SHA256SUMS` names another release than the one asked for.
+  No variable or option changes the key or skips the check; nothing is
+  downloaded, extracted or run before it;
+- refuses to install if the archive is not listed in `SHA256SUMS`, or if
+  its SHA-256 differs;
+- if the GitHub CLI 2.56 or later is installed and logged in, also runs
   `gh attestation verify --signer-workflow` and refuses on failure;
-  otherwise says the provenance is not verified and why, and goes on with
-  the SHA-256 check alone;
+  otherwise says the build provenance is not checked, and why;
 - runs the new `x0ne-engine --version` in the install directory before it
   replaces anything: a binary that does not run there leaves the previous
   install in place;
@@ -277,22 +285,59 @@ with `dpkg -i`, runs and removes in Debian 13 and Ubuntu 24.04 containers
 (`ENGINE_DEB=<file> make install-check`). It needs `libc6`, `libstdc++6`,
 `libgcc-s1` and `ca-certificates`.
 
+The block below stops at the first command that fails: it downloads into a
+new directory, verifies the signature of `SHA256SUMS` as `install.sh`
+does, checks that the list is the one of this release, then the `.deb`'s
+SHA-256, and only then runs `dpkg` as root. It needs curl and `ssh-keygen`
+(`openssh-client`); `ci/tests/installer.sh` replays it.
+
 ```sh
-gh release download v0.2.0-beta.7 --repo x0ne-labs/x0ne-Engine \
-  --pattern x0ne-engine_amd64.deb --pattern SHA256SUMS
-sha256sum --ignore-missing -c SHA256SUMS
-sudo dpkg -i x0ne-engine_amd64.deb
+(
+  set -eu
+  tag=v0.2.0-beta.7
+  url=https://github.com/x0ne-labs/x0ne-Engine/releases/download/$tag
+  dir=$(mktemp -d)
+  cd "$dir"
+  for f in SHA256SUMS SHA256SUMS.sig x0ne-engine_amd64.deb; do
+    curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL -o "$f" "$url/$f"
+  done
+  echo 'dev@x0ne.co namespaces="x0ne-engine-release" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICYdHwVN3y1azWxmVmm7sMQOI/BJGN2YI7qpGiQ0+4/Y' > allowed_signers
+  ssh-keygen -Y verify -f allowed_signers -I dev@x0ne.co -n x0ne-engine-release -s SHA256SUMS.sig < SHA256SUMS
+  test "$(head -n 1 SHA256SUMS)" = "# x0ne-labs/x0ne-Engine $tag" || { echo "SHA256SUMS is not the list of $tag" >&2; exit 1; }
+  awk '$2 == "x0ne-engine_amd64.deb"' SHA256SUMS | sha256sum -c -
+  sudo dpkg -i "$dir/x0ne-engine_amd64.deb"
+)
 ```
 
 ### Verify a release by hand
 
-With gh 2.56 or later; the same works for `x0ne-engine_amd64.deb` and
-`install.sh`, which `SHA256SUMS` lists and the release workflow attests too:
+The same steps, without installing: set `asset` to
+`x0ne-engine_amd64.deb` or `install.sh` for the other files `SHA256SUMS`
+lists.
 
 ```sh
-gh release download v0.2.0-beta.7 --repo x0ne-labs/x0ne-Engine \
-  --pattern x0ne-engine-x86_64-unknown-linux-gnu.tar.gz --pattern SHA256SUMS
-sha256sum --ignore-missing -c SHA256SUMS
+(
+  set -eu
+  tag=v0.2.0-beta.7
+  asset=x0ne-engine-x86_64-unknown-linux-gnu.tar.gz
+  url=https://github.com/x0ne-labs/x0ne-Engine/releases/download/$tag
+  dir=$(mktemp -d)
+  cd "$dir"
+  for f in SHA256SUMS SHA256SUMS.sig "$asset"; do
+    curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL -o "$f" "$url/$f"
+  done
+  echo 'dev@x0ne.co namespaces="x0ne-engine-release" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICYdHwVN3y1azWxmVmm7sMQOI/BJGN2YI7qpGiQ0+4/Y' > allowed_signers
+  ssh-keygen -Y verify -f allowed_signers -I dev@x0ne.co -n x0ne-engine-release -s SHA256SUMS.sig < SHA256SUMS
+  test "$(head -n 1 SHA256SUMS)" = "# x0ne-labs/x0ne-Engine $tag" || { echo "SHA256SUMS is not the list of $tag" >&2; exit 1; }
+  awk -v f="$asset" '$2 == f' SHA256SUMS | sha256sum -c -
+  echo "verified: $dir/$asset"
+)
+```
+
+With gh 2.56 or later, the build provenance too, in that directory: the
+release workflow attests every file `SHA256SUMS` lists.
+
+```sh
 gh attestation verify x0ne-engine-x86_64-unknown-linux-gnu.tar.gz --repo x0ne-labs/x0ne-Engine \
   --signer-workflow x0ne-labs/x0ne-Engine/.github/workflows/release.yml
 ```
