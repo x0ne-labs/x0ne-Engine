@@ -11,15 +11,21 @@
 # unsupported OS and CPU (a fake uname), a binary that does not run (the old install is
 # kept), http and redirects to http, no curl, provenance (a fake gh: absent, too old, logged
 # out, verifies, fails), uninstall. Then the README's .deb steps and "Verify a release by
-# hand", replayed with sh and bash: each stops at the first check that fails.
-# Without the glibc loader (Alpine) only the refusal is tested.
+# hand", replayed with sh and bash: each stops at the first check that fails, a head or an
+# awk that fails after a good line included, and downloads the asset only once the signature
+# and the list verify.
+# The release key of install.sh and of the README is checked against its fingerprint,
+# written below. docs/BRANCHING.md step 7, the maintainer's signature of SHA256SUMS, is
+# replayed with the TEST key and a fake gh: the attestation refused, the list of another
+# release, the draft's files replaced after the upload, a gh older than 2.102.0.
+# Without the glibc loader (Alpine), of install.sh only the refusal is tested.
 # Adapted from x0ne-Harness scripts/test-install-https-only.sh and test-install-provenance.sh.
 #
 #   sh ci/tests/installer.sh            (ci/install-matrix.sh runs it in four distributions)
 #
 # ENGINE_ARCHIVE=<x0ne-engine-x86_64-unknown-linux-gnu.tar.gz> serves that archive (real
 # binaries) as the good release. INSTALL_SH overrides the script under test. Needs curl,
-# openssl, python3, tar, gzip, ssh-keygen. Writes only under a temporary directory.
+# openssl, python3, tar, gzip, ssh-keygen, cmp. Writes only under a temporary directory.
 set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
 installer=${INSTALL_SH:-$root/install.sh}
@@ -44,7 +50,7 @@ ko() {
     fail=1
 }
 
-for tool in curl openssl python3 tar gzip ssh-keygen; do
+for tool in curl openssl python3 tar gzip ssh-keygen cmp; do
     command -v "$tool" >/dev/null 2>&1 || {
         echo "FAIL  $tool is not installed"
         exit 1
@@ -106,6 +112,52 @@ other_key=$(cut -d ' ' -f 2 "$tmp/keys/other.pub")
     echo "FAIL  no ALLOWED_SIGNER='... ssh-ed25519 <key>' line in $installer"
     exit 1
 }
+
+# block <file> <text>: the first ```sh block of <file> that contains <text>, without the
+# indentation of its opening fence (a block in a list item).
+block() {
+    awk -v w="$2" '
+        !inb && /^ *```sh$/ { inb = 1; ind = index($0, "`") - 1; b = ""; next }
+        inb && /^ *```$/ { inb = 0; if (index(b, w)) { printf "%s", b; found = 1; exit } next }
+        inb { b = b substr($0, ind + 1) "\n" }
+        END { exit !found }' "$1"
+}
+readme_blocks=1
+if ! block "$readme" 'dpkg -i' >"$tmp/deb.block" || ! block "$readme" 'verified: ' >"$tmp/hand.block"; then
+    ko "README.md: no sh block with dpkg -i, or none with \"verified: \""
+    readme_blocks=0
+fi
+
+# The release key against its fingerprint, written here and read from no file under test:
+# a wrong key copied alike into install.sh and the README fails.
+release_fp='SHA256:+8onkVcMPL3D/8vOL/xn5TrHLGWNYOKWbWIMwM+BPtE'
+# fingerprint <allowed_signers line>: what ssh-keygen -lf computes for its ssh-ed25519 key.
+fingerprint() {
+    printf '%s\n' "$1" | sed -n 's|.* \(ssh-ed25519 [A-Za-z0-9+/=]*\)$|\1|p' >"$tmp/fp.pub"
+    ssh-keygen -lf "$tmp/fp.pub" 2>/dev/null | awk '{ print $2 }'
+}
+fp=$(fingerprint "$allowed")
+if [ "$fp" = "$release_fp" ]; then
+    ok "install.sh: the key of ALLOWED_SIGNER is $fp (ssh-keygen -lf)"
+else
+    ko "install.sh: the key of ALLOWED_SIGNER is ${fp:-unreadable}, not $release_fp"
+fi
+if [ "$readme_blocks" = 1 ]; then
+    for b in deb hand; do
+        line=$(sed -n "s/^ *echo '\(.*\)' > allowed_signers\$/\1/p" "$tmp/$b.block")
+        fp=
+        [ "$(printf '%s\n' "$line" | grep -c .)" != 1 ] || fp=$(fingerprint "$line")
+        if [ "$fp" = "$release_fp" ]; then
+            ok "README.md, $b block: the key of allowed_signers is $fp (ssh-keygen -lf)"
+        else
+            ko "README.md, $b block: not one allowed_signers line with the key $release_fp (got ${fp:-none})"
+        fi
+    done
+fi
+for f in "$installer" "$readme"; do
+    if grep -qF -e "$release_fp" "$f"; then ok "${f##*/} names $release_fp"; else ko "${f##*/} does not name $release_fp"; fi
+done
+
 # The installer under test: install.sh with the TEST key in place of the release key, nothing else.
 sed "s|$real_key|$test_key|g" "$installer" >"$tmp/install.sh"
 if [ "$(grep -c -F -e "$real_key" "$installer")" = 1 ] && ! grep -q -F -e "$real_key" "$tmp/install.sh" &&
@@ -485,13 +537,167 @@ check() {
 untouched() {
     ! grep -qF -e "/$asset" "$tmp/requests" && [ ! -e "$tmp/canary" ]
 }
+shells="sh"
+if command -v bash >/dev/null 2>&1; then shells="sh bash"; fi
+
+# ── docs/BRANCHING.md step 7, the maintainer signs SHA256SUMS: replayed ───────
+# The TEST key signs; a fake gh keeps the draft release in a directory, a fake git names
+# the tag's commit; the checkout is a directory whose install.sh pins the TEST key.
+fake_commit=0123456789abcdef0123456789abcdef01234567
+mkdir "$tmp/checkout" "$tmp/ghm" "$tmp/git" "$tmp/drafts"
+cp "$installer" "$tmp/checkout/install.sh"
+printf '%s\n' "dev@x0ne.co namespaces=\"x0ne-engine-release\" $(cut -d ' ' -f 1-2 "$tmp/keys/release.pub")" >"$tmp/allowed-test"
+cat >"$tmp/git/git" <<'GIT'
+#!/bin/sh
+# TEST fake git: the commit of the tag FAKE_TAG, and nothing else.
+if [ "$*" = "rev-parse --verify $FAKE_TAG^{commit}" ]; then
+    echo "$FAKE_COMMIT"
+    exit 0
+fi
+echo "fake git: unexpected: $*" >&2
+exit 1
+GIT
+cat >"$tmp/ghm/gh" <<'GH'
+#!/bin/sh
+# TEST fake gh of docs/BRANCHING.md step 7: the draft release is the directory FAKE_DRAFT;
+# nothing reaches GitHub. FAKE_GH_VERIFY is the exit status of the attestation check.
+echo "gh $*" >>"$FAKE_GH_LOG"
+die() {
+    echo "fake gh: $*" >&2
+    exit 1
+}
+case "$1 ${2:-}" in
+    "--version ") echo "gh version $FAKE_GH_VERSION (fake)" ;;
+    "release download")
+        [ "$3" = "$FAKE_TAG" ] && [ "$4" = -R ] && [ "$5" = "$FAKE_REPO" ] || die "unexpected: $*"
+        shift 5
+        pats= dir=
+        while [ $# -ge 2 ]; do
+            case "$1" in
+                --pattern) pats="$pats $2" ;;
+                --dir) dir=$2 ;;
+                *) die "unexpected: $1" ;;
+            esac
+            shift 2
+        done
+        [ $# = 0 ] && [ -d "$dir" ] && [ -n "$pats" ] || die "unexpected arguments"
+        for p in $pats; do
+            [ -f "$FAKE_DRAFT/$p" ] || die "no assets match the file pattern $p"
+            [ ! -e "$dir/$p" ] || die "$dir/$p already exists"
+            cp "$FAKE_DRAFT/$p" "$dir/$p"
+        done
+        ;;
+    "release upload")
+        [ $# = 6 ] && [ "$3" = "$FAKE_TAG" ] && [ "$4" = -R ] && [ "$5" = "$FAKE_REPO" ] || die "unexpected: $*"
+        name=${6##*/}
+        [ ! -e "$FAKE_DRAFT/$name" ] || die "asset under the same name already exists: $name"
+        cp "$6" "$FAKE_DRAFT/$name"
+        # FAKE_SWAP: who controls the draft's assets replaces both files once the signature is up.
+        [ -z "$FAKE_SWAP" ] || cp "$FAKE_SWAP/SHA256SUMS" "$FAKE_SWAP/SHA256SUMS.sig" "$FAKE_DRAFT/"
+        ;;
+    "attestation verify")
+        echo "attested sha256=$(python3 -I -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$3")" >>"$FAKE_GH_LOG"
+        [ "$FAKE_GH_VERIFY" = 0 ] || die "attestation verification failed"
+        ;;
+    *) die "unexpected: $*" ;;
+esac
+GH
+chmod 0755 "$tmp/git/git" "$tmp/ghm/gh"
+# Drafts: the good one; the list of another release; a pair signed for this tag but not
+# the one the maintainer signs (an older signed list), which verifies on its own.
+r="$tmp/drafts/good/v$version"
+mkdir -p "$r"
+printf 'TEST asset GOOD\n' >"$r/x0ne-engine-test.txt"
+sums "$r" x0ne-engine-test.txt
+rm "$r/x0ne-engine-test.txt"
+r="$tmp/drafts/other-release/v0.0.1-test"
+mkdir -p "$r"
+printf 'TEST asset OTHER\n' >"$r/x0ne-engine-test.txt"
+sums "$r" x0ne-engine-test.txt
+rm "$r/x0ne-engine-test.txt"
+r="$tmp/drafts/swap/v$version"
+mkdir -p "$r"
+printf 'TEST asset SWAPPED\n' >"$r/x0ne-engine-test.txt"
+sums "$r" x0ne-engine-test.txt
+rm "$r/x0ne-engine-test.txt"
+sign "$r"
+if ssh-keygen -Y verify -f "$tmp/allowed-test" -I dev@x0ne.co -n x0ne-engine-release \
+    -s "$r/SHA256SUMS.sig" <"$r/SHA256SUMS" >/dev/null 2>&1; then
+    ok "step 7: the swapped pair verifies on its own, with the first line of v$version"
+else
+    ko "step 7: the swapped pair does not verify on its own"
+fi
+# step7 <label> <draft> <passes|unsigned|stops> <line> [VAR=value ...]: the block with sh and
+# bash, against a copy of <draft>, and <line> in its output. passes: exit 0, gh called in the
+# order of the procedure, the attested file is the draft's list, the uploaded signature the
+# TEST key's over it. unsigned: exit not 0, no signature made, nothing uploaded.
+step7() {
+    label=$1 src=$2 want=$3 line=$4
+    shift 4
+    for shell in $shells; do
+        run7=$label.$shell draft=$tmp/draft-$label.$shell
+        rm -rf "$draft"
+        cp -R "$src" "$draft"
+        mkdir -p "$tmp/s7-$run7" "$tmp/home-$run7"
+        rc=0
+        (cd "$tmp/checkout" && env PATH="$tmp/ghm:$tmp/git:$tmp/nogh" HOME="$tmp/home-$run7" \
+            TMPDIR="$tmp/s7-$run7" FAKE_GH_LOG="$tmp/$run7.gh" FAKE_DRAFT="$draft" FAKE_TAG="v$version" \
+            FAKE_REPO="$repo" FAKE_COMMIT="$fake_commit" FAKE_GH_VERSION=2.102.0 FAKE_GH_VERIFY=0 \
+            FAKE_SWAP= "$@" "$shell" "$tmp/step7.sh") >"$tmp/$run7.log" 2>&1 || rc=$?
+        sigs=$(find "$tmp/s7-$run7" "$draft" -name '*.sig' | wc -l | tr -d ' ')
+        calls=$(awk '/^gh / { printf "%s%s", s, ($2 == "--version" ? $2 : $2 " " $3); s = ", " }' "$tmp/$run7.gh")
+        good=1
+        grep -qF -e "$line" "$tmp/$run7.log" || good=0
+        case "$want" in
+            passes)
+                att=$(grep '^gh attestation verify ' "$tmp/$run7.gh" || true)
+                case "$(printf '%s\n' "$att" | cut -d ' ' -f 4)" in "$tmp/s7-$run7"/*/SHA256SUMS) ;; *) good=0 ;; esac
+                [ "$rc" = 0 ] &&
+                    [ "$calls" = "--version, release download, attestation verify, release upload, release download" ] &&
+                    [ "$(printf '%s\n' "$att" | cut -d ' ' -f 5-)" = "$want_att" ] &&
+                    grep -qx "attested sha256=$(sha "$src/SHA256SUMS")" "$tmp/$run7.gh" &&
+                    ssh-keygen -Y verify -f "$tmp/allowed-test" -I dev@x0ne.co -n x0ne-engine-release \
+                        -s "$draft/SHA256SUMS.sig" <"$src/SHA256SUMS" >/dev/null 2>&1 || good=0
+                ;;
+            unsigned) [ "$rc" != 0 ] && [ "$sigs" = 0 ] && ! grep -q '^gh release upload' "$tmp/$run7.gh" || good=0 ;;
+            *) [ "$rc" != 0 ] || good=0 ;;
+        esac
+        if [ "$good" = 1 ]; then
+            ok "$label ($shell): exit $rc, $sigs signature(s), gh: $calls; $(grep -F -e "$line" "$tmp/$run7.log" | head -n 1 | cut -c1-70)"
+        else
+            ko "$label ($shell): exit $rc, $sigs signature(s), gh: $calls; expected it $want with \"$line\""
+            sed 's/^/      /' "$tmp/$run7.log" "$tmp/$run7.gh"
+        fi
+    done
+}
+want_att="--repo $repo --signer-workflow $repo/.github/workflows/release.yml --source-ref refs/tags/v$version --source-digest $fake_commit --deny-self-hosted-runners"
+if ! block "$root/docs/BRANCHING.md" 'ssh-keygen -Y sign' >"$tmp/step7.block"; then
+    ko "docs/BRANCHING.md: no sh block with ssh-keygen -Y sign"
+else
+    # shellcheck disable=SC2088 # the literal text of the block
+    if [ "$(grep -c '^ *tag=vX\.Y\.Z$' "$tmp/step7.block")" = 1 ] &&
+        [ "$(grep -c -F -e '~/.ssh/x0ne_signing' "$tmp/step7.block")" = 1 ]; then
+        sed -e "s|^\( *\)tag=vX\.Y\.Z\$|\1tag=v$version|" -e "s|~/\.ssh/x0ne_signing|$tmp/keys/release|" \
+            "$tmp/step7.block" >"$tmp/step7.sh"
+        ok "docs/BRANCHING.md step 7: tag=vX.Y.Z and ~/.ssh/x0ne_signing, once each, replaced by v$version and the TEST key"
+        step7 step7 "$tmp/drafts/good/v$version" passes 'Good "x0ne-engine-release" signature for dev@x0ne.co'
+        step7 step7-attestation-refused "$tmp/drafts/good/v$version" unsigned "attestation verification failed" FAKE_GH_VERIFY=1
+        step7 step7-other-release "$tmp/drafts/other-release/v0.0.1-test" unsigned \
+            "SHA256SUMS is not the list of v$version: # x0ne-Engine v0.0.1-test"
+        step7 step7-swapped-after-upload "$tmp/drafts/good/v$version" stops "differ" FAKE_SWAP="$tmp/drafts/swap/v$version"
+        step7 step7-gh-2.101 "$tmp/drafts/good/v$version" unsigned "gh 2.102.0 or later is required" FAKE_GH_VERSION=2.101.0
+        check step7-gh-2.101 "gh was asked nothing but its version" sh -c "[ \"\$(cat '$tmp/step7-gh-2.101.sh.gh')\" = 'gh --version' ]"
+    else
+        ko "docs/BRANCHING.md step 7: not one tag=vX.Y.Z line and one ~/.ssh/x0ne_signing"
+    fi
+fi
 
 if [ ! -e /lib64/ld-linux-x86-64.so.2 ]; then
     # No glibc loader (musl): the installer must stop before it downloads anything.
     : >"$tmp/requests"
     try no-glibc refused "no glibc loader at /lib64/ld-linux-x86-64.so.2" "$url/good"
     check no-glibc "no request reached the server" test ! -s "$tmp/requests"
-    echo "installer: $n ok (no glibc loader on this system: the refusal only)"
+    echo "installer: $n ok (no glibc loader on this system: of install.sh, the refusal only)"
     exit "$fail"
 fi
 
@@ -633,20 +839,14 @@ env PATH="$tmp/nogh" HOME="$tmp/home-default" X0NE_ENGINE_INSTALL_DIR="$dir" sh 
 check uninstall "again: Nothing to remove" grep -qF "Nothing to remove in $dir" "$tmp/uninstall2.log"
 
 # ── README: the .deb steps and "Verify a release by hand", replayed ─────────
-# block <text>: the first ```sh block of README.md that contains <text>.
-block() {
-    awk -v w="$1" '
-        $0 == "```sh" { inb = 1; b = ""; next }
-        inb && $0 == "```" { inb = 0; if (index(b, w)) { printf "%s", b; found = 1; exit } next }
-        inb { b = b $0 "\n" }
-        END { exit !found }' "$readme"
-}
 releases="https://github.com/$repo/releases"
-shells="sh"
-if command -v bash >/dev/null 2>&1; then shells="sh bash"; fi
-if ! block 'dpkg -i' >"$tmp/deb.block" || ! block 'verified: ' >"$tmp/hand.block"; then
-    ko "README.md: no sh block with dpkg -i, or none with \"verified: \""
-else
+# N2: a head or an awk that prints the right line, then fails.
+for t in head awk; do
+    mkdir "$tmp/bad$t"
+    printf '#!/bin/sh\n# TEST fake %s: the real one, then exit 1.\n"%s" "$@"\nexit 1\n' "$t" "$(command -v "$t")" >"$tmp/bad$t/$t"
+    chmod 0755 "$tmp/bad$t/$t"
+done
+if [ "$readme_blocks" = 1 ]; then
     for b in deb hand; do
         if [ "$(grep -cF -e "echo '$allowed' > allowed_signers" "$tmp/$b.block")" = 1 ] &&
             grep -qF -e "tag=v$version" "$tmp/$b.block" && grep -qF -e "url=$releases/download/" "$tmp/$b.block"; then
@@ -656,9 +856,10 @@ else
         fi
     done
     deb_sha=$(sha "$goodrel/x0ne-engine_amd64.deb")
-    # replay <label> <deb|hand> <site> <passes|stops> [VAR=value ...]: the block with sh and bash,
-    # its URL on <site> of the test server, the TEST key in place of the release key. deb passes:
-    # the fake sudo got "dpkg -i" and the good .deb; it stops: exit not 0 and no sudo at all.
+    # replay <label> <deb|hand> <site> <passes|stops|stops-early> [VAR=value ...]: the block with
+    # sh and bash, its URL on <site> of the test server, the TEST key in place of the release key.
+    # deb passes: the fake sudo got "dpkg -i" and the good .deb, requested last; it stops: exit
+    # not 0 and no sudo at all; stops-early: so, and the .deb or the asset was never requested.
     replay() {
         label=$1 kind=$2 site=$3 want=$4
         shift 4
@@ -667,9 +868,12 @@ else
             ko "$label: the replayed block still names github.com"
             return
         fi
+        file=$asset
+        [ "$kind" = hand ] || file=x0ne-engine_amd64.deb
         for shell in $shells; do
             log="$tmp/$label.$shell.log" sudolog="$tmp/$label.$shell.sudo"
             mkdir -p "$tmp/rtmp-$label-$shell"
+            : >"$tmp/requests"
             rc=0
             env PATH="$tmp/sudo:$tmp/nogh" CURL_CA_BUNDLE="$tmp/cert.pem" TMPDIR="$tmp/rtmp-$label-$shell" \
                 FAKE_SUDO_LOG="$sudolog" "$@" "$shell" "$tmp/$label.sh" >"$log" 2>&1 || rc=$?
@@ -679,28 +883,36 @@ else
             else
                 grep -q "^verified: .*/$asset\$" "$log" && passed=1
             fi
-            if [ "$want:$rc:$passed" = passes:0:1 ]; then
-                ok "$label ($shell): passed, $(tail -n 1 "$log" | cut -c1-90)"
-            elif [ "$want" = stops ] && [ "$rc" != 0 ] && [ "$passed" = 0 ] && [ ! -s "$sudolog" ]; then
-                ok "$label ($shell): stopped (exit $rc), $(grep -v '^ *$' "$log" | tail -n 1 | cut -c1-90)"
+            fetched=none
+            grep -qF -e "/$file" "$tmp/requests" && fetched=yes
+            [ "$(tail -n 1 "$tmp/requests")" = "https /$site/download/v$version/$file" ] && fetched=last
+            if [ "$want:$rc:$passed:$fetched" = passes:0:1:last ]; then
+                ok "$label ($shell): passed, $file requested last, $(tail -n 1 "$log" | cut -c1-70)"
+            elif [ "$want" != passes ] && [ "$rc" != 0 ] && [ "$passed" = 0 ] && [ ! -s "$sudolog" ] &&
+                { [ "$want" = stops ] || [ "$fetched" = none ]; }; then
+                ok "$label ($shell): stopped (exit $rc), $file requested: $fetched, $(grep -v '^ *$' "$log" | tail -n 1 | cut -c1-70)"
             else
-                ko "$label ($shell): exit $rc, expected it $want"
+                ko "$label ($shell): exit $rc, $file requested: $fetched, expected it $want"
                 sed 's/^/      /' "$log"
             fi
         done
     }
     replay readme-deb deb good passes
-    replay readme-deb-sig-missing deb nosig stops
-    replay readme-deb-sums-replaced deb forged stops
-    replay readme-deb-other-key deb otherkey stops
-    replay readme-deb-other-release deb replay stops
+    replay readme-deb-sig-missing deb nosig stops-early
+    replay readme-deb-sums-replaced deb forged stops-early
+    replay readme-deb-other-key deb otherkey stops-early
+    replay readme-deb-other-release deb replay stops-early
     replay readme-deb-tampered deb debtampered stops
-    replay readme-deb-unlisted deb debunlisted stops
+    replay readme-deb-unlisted deb debunlisted stops-early
     replay readme-deb-missing deb debmissing stops
-    replay readme-deb-no-ssh-keygen deb good stops PATH="$tmp/sudo:$tmp/nossh"
+    replay readme-deb-no-ssh-keygen deb good stops-early PATH="$tmp/sudo:$tmp/nossh"
+    replay readme-deb-head-fails deb good stops-early PATH="$tmp/badhead:$tmp/sudo:$tmp/nogh"
+    replay readme-deb-awk-fails deb good stops-early PATH="$tmp/badawk:$tmp/sudo:$tmp/nogh"
     replay readme-by-hand hand good passes
-    replay readme-by-hand-sums-replaced hand forged stops
-    replay readme-by-hand-other-release hand replay stops
+    replay readme-by-hand-sums-replaced hand forged stops-early
+    replay readme-by-hand-other-release hand replay stops-early
+    replay readme-by-hand-head-fails hand good stops-early PATH="$tmp/badhead:$tmp/nogh"
+    replay readme-by-hand-awk-fails hand good stops-early PATH="$tmp/badawk:$tmp/nogh"
 fi
 
 [ "$under_test" = "$root/install.sh" ] || echo "installer: tested $under_test (INSTALL_SH)"

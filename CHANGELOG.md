@@ -28,13 +28,20 @@ this section; the others landed until 2026-11-07.
   `make install-check` tests it against fake releases signed with a test
   key, in Debian 13, Ubuntu 24.04, Fedora 43 and Alpine 3 containers
   (`ci/tests/installer.sh`, `ci/install-matrix.sh`), and so does the
-  `ci-scripts` job; the same test replays the README's `.deb` steps, which
-  stop at the first failed check, before `dpkg`.
+  `ci-scripts` job; the same test checks the key of `install.sh` and of the
+  README against its fingerprint, and replays the README's `.deb` steps,
+  which download the `.deb` only once the signature and the list verify,
+  and stop at the first failed check, before `dpkg`.
 - The release workflow attaches `x0ne-engine_amd64.deb` and `install.sh`,
   both in `SHA256SUMS` and attested (2026-11-07); `SHA256SUMS` starts with
   `# x0ne-Engine <tag>`, and the maintainer signs it and uploads
   `SHA256SUMS.sig` to the draft before publishing it (`docs/BRANCHING.md`,
-  2026-11-07). The `.deb` ships the
+  2026-11-07). The maintainer signs only the downloaded file whose build
+  provenance `gh attestation verify` (gh 2.102.0+) checked first: signed by
+  `release.yml`, built from the tag's ref and commit on a GitHub-hosted
+  runner; the draft's copy must then be the bytes signed.
+  `ci/tests/installer.sh` replays these steps with a test key and a fake
+  gh. The `.deb` ships the
   archive's three binaries (`ci/deb-pack.sh`: the fields of
   `ci/deb/x0ne-engine.ctl`, dpkg-deb, every date at `SOURCE_DATE_EPOCH`;
   `ci/deb-verify.sh` checks it); the two builds must give the same `.deb`.
