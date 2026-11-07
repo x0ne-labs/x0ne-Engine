@@ -28,8 +28,9 @@ this section; the others landed until 2026-11-07.
   archive's three binaries (`ci/deb-pack.sh`: the fields of
   `ci/deb/x0ne-engine.ctl`, dpkg-deb, every date at `SOURCE_DATE_EPOCH`;
   `ci/deb-verify.sh` checks it); the two builds must give the same `.deb`.
-  A new job installs the archive with `install.sh` and the `.deb` with
-  `dpkg` in four distributions before the draft. The tag must equal
+  Before the draft, a new job installs the archive with `install.sh` in
+  Debian 13, Ubuntu 24.04 and Fedora 43 (refused on Alpine 3), and the
+  `.deb` with `dpkg` in Debian 13 and Ubuntu 24.04. The tag must equal
   `install.sh`'s `VERSION`.
 
 ### Security
