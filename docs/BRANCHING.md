@@ -64,23 +64,26 @@ workspace; tag `vX.Y.Z` equals it. Pre-releases: `-alpha.N`, `-beta.N`, `-rc.N`.
 7. Sign the checksum list with the release key, the one that signs the tag
    (`install.sh` pins its public half), and upload the signature to the draft.
    `install.sh` and the README's `.deb` steps refuse a release without
-   `SHA256SUMS.sig`. On the maintainer's machine, in a new directory:
+   `SHA256SUMS.sig`. On the maintainer's machine, in a checkout of the tag
+   (gh finds the repository from its GitHub remote):
 
    ```sh
-   gh release download vX.Y.Z --repo x0ne-labs/x0ne-Engine --pattern SHA256SUMS &&
-   test "$(head -n 1 SHA256SUMS)" = "# x0ne-labs/x0ne-Engine vX.Y.Z" &&
-   ssh-keygen -Y sign -f ~/.ssh/x0ne_signing -n x0ne-engine-release SHA256SUMS &&
-   gh release upload vX.Y.Z SHA256SUMS.sig --repo x0ne-labs/x0ne-Engine
+   d=$(mktemp -d) &&
+   gh release download vX.Y.Z --pattern SHA256SUMS --dir "$d" &&
+   test "$(head -n 1 "$d/SHA256SUMS")" = "# x0ne-Engine vX.Y.Z" &&
+   ssh-keygen -Y sign -f ~/.ssh/x0ne_signing -n x0ne-engine-release "$d/SHA256SUMS" &&
+   gh release upload vX.Y.Z "$d/SHA256SUMS.sig"
    ```
 
    Then download both back from the draft into another new directory and
-   verify them against the key of `install.sh`, as the script does
-   (`<tree>`: a checkout of the tag):
+   verify them against the key of `install.sh`, as the script does:
 
    ```sh
-   gh release download vX.Y.Z --repo x0ne-labs/x0ne-Engine --pattern SHA256SUMS --pattern SHA256SUMS.sig &&
-   sed -n "s/^ALLOWED_SIGNER='\(.*\)'\$/\1/p" <tree>/install.sh > allowed_signers &&
-   ssh-keygen -Y verify -f allowed_signers -I dev@x0ne.co -n x0ne-engine-release -s SHA256SUMS.sig < SHA256SUMS
+   v=$(mktemp -d) &&
+   gh release download vX.Y.Z --pattern SHA256SUMS --pattern SHA256SUMS.sig --dir "$v" &&
+   sed -n "s/^ALLOWED_SIGNER='\(.*\)'\$/\1/p" install.sh > "$v/allowed_signers" &&
+   ssh-keygen -Y verify -f "$v/allowed_signers" -I dev@x0ne.co -n x0ne-engine-release \
+     -s "$v/SHA256SUMS.sig" < "$v/SHA256SUMS"
    ```
 
    It prints `Good "x0ne-engine-release" signature for dev@x0ne.co`.

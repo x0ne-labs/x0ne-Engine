@@ -151,8 +151,8 @@ verify_signature() {
     fi
     say "Signature verified: ${out}"
     first=$(awk 'NR == 1 { print; exit }' "${TMP}/SHA256SUMS")
-    [ "$first" = "# ${REPO} ${TAG}" ] ||
-        die "the signed SHA256SUMS is not the list of ${TAG}: its first line is '${first}', not '# ${REPO} ${TAG}'. Nothing was installed."
+    [ "$first" = "# x0ne-Engine ${TAG}" ] ||
+        die "the signed SHA256SUMS is not the list of ${TAG}: its first line is '${first}', not '# x0ne-Engine ${TAG}'. Nothing was installed."
 }
 
 download_archive() {

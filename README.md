@@ -303,7 +303,7 @@ SHA-256, and only then runs `dpkg` as root. It needs curl and `ssh-keygen`
   done
   echo 'dev@x0ne.co namespaces="x0ne-engine-release" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICYdHwVN3y1azWxmVmm7sMQOI/BJGN2YI7qpGiQ0+4/Y' > allowed_signers
   ssh-keygen -Y verify -f allowed_signers -I dev@x0ne.co -n x0ne-engine-release -s SHA256SUMS.sig < SHA256SUMS
-  test "$(head -n 1 SHA256SUMS)" = "# x0ne-labs/x0ne-Engine $tag" || { echo "SHA256SUMS is not the list of $tag" >&2; exit 1; }
+  test "$(head -n 1 SHA256SUMS)" = "# x0ne-Engine $tag" || { echo "SHA256SUMS is not the list of $tag" >&2; exit 1; }
   awk '$2 == "x0ne-engine_amd64.deb"' SHA256SUMS | sha256sum -c -
   sudo dpkg -i "$dir/x0ne-engine_amd64.deb"
 )
@@ -328,7 +328,7 @@ lists.
   done
   echo 'dev@x0ne.co namespaces="x0ne-engine-release" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICYdHwVN3y1azWxmVmm7sMQOI/BJGN2YI7qpGiQ0+4/Y' > allowed_signers
   ssh-keygen -Y verify -f allowed_signers -I dev@x0ne.co -n x0ne-engine-release -s SHA256SUMS.sig < SHA256SUMS
-  test "$(head -n 1 SHA256SUMS)" = "# x0ne-labs/x0ne-Engine $tag" || { echo "SHA256SUMS is not the list of $tag" >&2; exit 1; }
+  test "$(head -n 1 SHA256SUMS)" = "# x0ne-Engine $tag" || { echo "SHA256SUMS is not the list of $tag" >&2; exit 1; }
   awk -v f="$asset" '$2 == f' SHA256SUMS | sha256sum -c -
   echo "verified: $dir/$asset"
 )

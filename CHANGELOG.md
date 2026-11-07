@@ -32,7 +32,7 @@ this section; the others landed until 2026-11-07.
   stop at the first failed check, before `dpkg`.
 - The release workflow attaches `x0ne-engine_amd64.deb` and `install.sh`,
   both in `SHA256SUMS` and attested (2026-11-07); `SHA256SUMS` starts with
-  `# <repository> <tag>`, and the maintainer signs it and uploads
+  `# x0ne-Engine <tag>`, and the maintainer signs it and uploads
   `SHA256SUMS.sig` to the draft before publishing it (`docs/BRANCHING.md`,
   2026-11-07). The `.deb` ships the
   archive's three binaries (`ci/deb-pack.sh`: the fields of

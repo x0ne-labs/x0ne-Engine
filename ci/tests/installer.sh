@@ -82,12 +82,12 @@ if [ -f "$wf" ]; then
         for f in a.tar.gz b.deb c.cdx.json binaries.sha256; do printf '%s\n' "$f" >"$tmp/ws/dist/$f"; done
         cp "$installer" "$tmp/ws/install.sh"
         rc=0
-        (cd "$tmp/ws" && TAG="v$version" GITHUB_REPOSITORY="$repo" bash "$tmp/sums-step.sh") >"$tmp/sums-step.log" 2>&1 || rc=$?
+        (cd "$tmp/ws" && TAG="v$version" bash "$tmp/sums-step.sh") >"$tmp/sums-step.log" 2>&1 || rc=$?
         first=$(awk 'NR == 1' "$tmp/ws/dist/SHA256SUMS" 2>/dev/null || true)
-        if [ "$rc" = 0 ] && [ "$first" = "# $repo v$version" ] && grep -q '  install.sh$' "$tmp/ws/dist/SHA256SUMS"; then
+        if [ "$rc" = 0 ] && [ "$first" = "# x0ne-Engine v$version" ] && grep -q '  install.sh$' "$tmp/ws/dist/SHA256SUMS"; then
             ok "release.yml: SHA256SUMS starts with \"$first\", sha256sum -c passes"
         else
-            ko "release.yml: the SHA256SUMS step (exit $rc) wrote \"$first\", expected \"# $repo v$version\""
+            ko "release.yml: the SHA256SUMS step (exit $rc) wrote \"$first\", expected \"# x0ne-Engine v$version\""
             sed 's/^/      /' "$tmp/sums-step.log"
         fi
     fi
@@ -146,12 +146,12 @@ sha() {
     python3 -I -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"
 }
 # sums <dir> <file>...: SHA256SUMS of these files, in that directory, after the line
-# "# <repo> <tag>" the release workflow writes first (<tag>: the directory's name).
+# "# x0ne-Engine <tag>" the release workflow writes first (<tag>: the directory's name).
 sums() {
     dir=$1
     shift
     {
-        printf '# %s %s\n' "$repo" "${dir##*/}"
+        printf '# x0ne-Engine %s\n' "${dir##*/}"
         (cd "$dir" && for f in "$@"; do printf '%s  %s\n' "$(sha "$f")" "$f"; done)
     } >"$dir/SHA256SUMS"
 }
@@ -550,7 +550,7 @@ for c in "sig-missing:nosig:no SHA256SUMS.sig for v$version: refusing a release 
     "sig-sums-replaced:forged:$sigfail" \
     "sig-other-key:otherkey:$sigfail" \
     "sig-other-namespace:othernamespace:$sigfail" \
-    "sig-other-release:replay:the signed SHA256SUMS is not the list of v$version: its first line is '# $repo v0.0.1-test'" \
+    "sig-other-release:replay:the signed SHA256SUMS is not the list of v$version: its first line is '# x0ne-Engine v0.0.1-test'" \
     "sig-no-release-line:noline:the signed SHA256SUMS is not the list of v$version"; do
     label=${c%%:*} rest=${c#*:}
     : >"$tmp/requests"
