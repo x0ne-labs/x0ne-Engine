@@ -285,10 +285,11 @@ with `dpkg -i`, runs and removes in Debian 13 and Ubuntu 24.04 containers
 (`ENGINE_DEB=<file> make install-check`). It needs `libc6`, `libstdc++6`,
 `libgcc-s1` and `ca-certificates`.
 
-The block below stops at the first command that fails: it downloads into a
-new directory, verifies the signature of `SHA256SUMS` as `install.sh`
-does, checks that the list is the one of this release, then the `.deb`'s
-SHA-256, and only then runs `dpkg` as root. It needs curl and `ssh-keygen`
+The block below stops at the first command that fails: in a new
+directory, it downloads `SHA256SUMS` and its signature, verifies the
+signature as `install.sh` does, checks that the list is the one of this
+release and names the `.deb`, and only then downloads the `.deb`, checks
+its SHA-256, and runs `dpkg` as root. It needs curl and `ssh-keygen`
 (`openssh-client`); `ci/tests/installer.sh` replays it.
 
 ```sh
@@ -298,13 +299,18 @@ SHA-256, and only then runs `dpkg` as root. It needs curl and `ssh-keygen`
   url=https://github.com/x0ne-labs/x0ne-Engine/releases/download/$tag
   dir=$(mktemp -d)
   cd "$dir"
-  for f in SHA256SUMS SHA256SUMS.sig x0ne-engine_amd64.deb; do
+  for f in SHA256SUMS SHA256SUMS.sig; do
     curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL -o "$f" "$url/$f"
   done
   echo 'dev@x0ne.co namespaces="x0ne-engine-release" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICYdHwVN3y1azWxmVmm7sMQOI/BJGN2YI7qpGiQ0+4/Y' > allowed_signers
   ssh-keygen -Y verify -f allowed_signers -I dev@x0ne.co -n x0ne-engine-release -s SHA256SUMS.sig < SHA256SUMS
-  test "$(head -n 1 SHA256SUMS)" = "# x0ne-Engine $tag" || { echo "SHA256SUMS is not the list of $tag" >&2; exit 1; }
-  awk '$2 == "x0ne-engine_amd64.deb"' SHA256SUMS | sha256sum -c -
+  first=$(head -n 1 SHA256SUMS)
+  test "$first" = "# x0ne-Engine $tag" || { echo "SHA256SUMS is not the list of $tag" >&2; exit 1; }
+  line=$(awk '$2 == "x0ne-engine_amd64.deb"' SHA256SUMS)
+  test -n "$line" || { echo "x0ne-engine_amd64.deb is not in SHA256SUMS" >&2; exit 1; }
+  printf '%s\n' "$line" > asset.sha256
+  curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL -o x0ne-engine_amd64.deb "$url/x0ne-engine_amd64.deb"
+  sha256sum -c asset.sha256
   sudo dpkg -i "$dir/x0ne-engine_amd64.deb"
 )
 ```
@@ -313,7 +319,8 @@ SHA-256, and only then runs `dpkg` as root. It needs curl and `ssh-keygen`
 
 The same steps, without installing: set `asset` to
 `x0ne-engine_amd64.deb` or `install.sh` for the other files `SHA256SUMS`
-lists.
+lists. The asset is downloaded only once the signature and the list
+verify.
 
 ```sh
 (
@@ -323,13 +330,18 @@ lists.
   url=https://github.com/x0ne-labs/x0ne-Engine/releases/download/$tag
   dir=$(mktemp -d)
   cd "$dir"
-  for f in SHA256SUMS SHA256SUMS.sig "$asset"; do
+  for f in SHA256SUMS SHA256SUMS.sig; do
     curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL -o "$f" "$url/$f"
   done
   echo 'dev@x0ne.co namespaces="x0ne-engine-release" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICYdHwVN3y1azWxmVmm7sMQOI/BJGN2YI7qpGiQ0+4/Y' > allowed_signers
   ssh-keygen -Y verify -f allowed_signers -I dev@x0ne.co -n x0ne-engine-release -s SHA256SUMS.sig < SHA256SUMS
-  test "$(head -n 1 SHA256SUMS)" = "# x0ne-Engine $tag" || { echo "SHA256SUMS is not the list of $tag" >&2; exit 1; }
-  awk -v f="$asset" '$2 == f' SHA256SUMS | sha256sum -c -
+  first=$(head -n 1 SHA256SUMS)
+  test "$first" = "# x0ne-Engine $tag" || { echo "SHA256SUMS is not the list of $tag" >&2; exit 1; }
+  line=$(awk -v f="$asset" '$2 == f' SHA256SUMS)
+  test -n "$line" || { echo "$asset is not in SHA256SUMS" >&2; exit 1; }
+  printf '%s\n' "$line" > asset.sha256
+  curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL -o "$asset" "$url/$asset"
+  sha256sum -c asset.sha256
   echo "verified: $dir/$asset"
 )
 ```
