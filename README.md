@@ -228,6 +228,77 @@ As with any trusted execution environment:
 [docs/limitations.md](docs/limitations.md) and the
 [threat model](x0ne-infer/THREAT_MODEL.md) give the whole list.
 
+## Install
+
+Each GitHub release, from v0.2.0-beta.7, carries the client binaries
+prebuilt: `x0ne-engine`, `x0ne-engine-cloud` and `x0ne-engine-proxy`, for
+Linux on x86_64 with glibc. The server, `x0ne-infer`, runs in the
+confidential VM and ships in no release asset. Installing the client
+changes nothing in [Status](#status): x0ne Engine is not end-to-end
+confidential yet.
+
+```sh
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/x0ne-labs/x0ne-Engine/main/install.sh | sh
+```
+
+`make install-check` runs `install.sh` against fake releases served on
+127.0.0.1, as an ordinary user without network, in Debian 13, Ubuntu 24.04,
+Fedora 43 and Alpine 3 containers. What the script does, and nothing else:
+
+- installs the release named on its `VERSION` line (0.2.0-beta.7);
+  `--version <v>` or `X0NE_ENGINE_VERSION` picks another
+  (`curl ... | sh -s -- --version <v>`);
+- stops before any download on an OS other than Linux, a CPU other than
+  x86_64, or a system without the glibc loader (Alpine, musl);
+- downloads `x0ne-engine-x86_64-unknown-linux-gnu.tar.gz` and `SHA256SUMS`
+  from the release, with curl, over https only: an http mirror or a
+  redirect to http is refused. It makes no other request;
+- refuses to install if `SHA256SUMS` is missing, if the archive is not
+  listed in it, or if its SHA-256 differs;
+- if the GitHub CLI 2.56 or later is installed and logged in, runs
+  `gh attestation verify --signer-workflow` and refuses on failure;
+  otherwise says the provenance is not verified and why, and goes on with
+  the SHA-256 check alone;
+- runs the new `x0ne-engine --version` in the install directory before it
+  replaces anything: a binary that does not run there leaves the previous
+  install in place;
+- copies the three binaries to `~/.local/bin` (`X0NE_ENGINE_INSTALL_DIR` to
+  change it). No `sudo`; no shell file is edited.
+
+`sh install.sh --uninstall` removes the three binaries and keeps the model
+cache. A pipe into `sh` runs whatever the server sends: to read the script
+first, download it with `curl -fsSLO`, read it, then run `sh install.sh`.
+
+### Debian and Ubuntu package
+
+The release also carries `x0ne-engine_amd64.deb`: the same three binaries
+in `/usr/bin`, byte for byte (the release workflow checks it). It installs
+with `dpkg -i`, runs and removes in Debian 13 and Ubuntu 24.04 containers
+(`ENGINE_DEB=<file> make install-check`). It needs `libc6`, `libstdc++6`,
+`libgcc-s1` and `ca-certificates`.
+
+```sh
+gh release download v0.2.0-beta.7 --repo x0ne-labs/x0ne-Engine \
+  --pattern x0ne-engine_amd64.deb --pattern SHA256SUMS
+sha256sum --ignore-missing -c SHA256SUMS
+sudo dpkg -i x0ne-engine_amd64.deb
+```
+
+### Verify a release by hand
+
+With gh 2.56 or later; the same works for `x0ne-engine_amd64.deb` and
+`install.sh`, which `SHA256SUMS` lists and the release workflow attests too:
+
+```sh
+gh release download v0.2.0-beta.7 --repo x0ne-labs/x0ne-Engine \
+  --pattern x0ne-engine-x86_64-unknown-linux-gnu.tar.gz --pattern SHA256SUMS
+sha256sum --ignore-missing -c SHA256SUMS
+gh attestation verify x0ne-engine-x86_64-unknown-linux-gnu.tar.gz --repo x0ne-labs/x0ne-Engine \
+  --signer-workflow x0ne-labs/x0ne-Engine/.github/workflows/release.yml
+```
+
+Other platforms build from source, below.
+
 ## Quick start
 
 Replayed on Debian 13 (trixie) in a fresh `debian:trixie-slim` container, as

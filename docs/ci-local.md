@@ -318,7 +318,7 @@ Three pipelines build the Engine, from the same `Cargo.lock` and the same profil
 |---|---|---|
 | `.deb` of `make deb` (`DEB_STAGING`): `x0ne-engine`, the client | `ci/inside-deb.sh` in the CI image | `/vendor/crates/` |
 | x0ne OS packages and the `x0ne-infer` of the CVM image (`cuda nvml`) | x0ne OS `scripts/pkg-engine.sh`, `scripts/pkg-infer-cuda.sh` | `/out/cache/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/` |
-| release archive `x0ne-engine-<target>.tar.gz`, the client binaries (`cargo auditable`, no feature, as the `.deb`) | `.github/workflows/release.yml`, `scripts/sbom.sh` in `rust:1.98.1-bookworm` | `/usr/local/cargo/registry/` |
+| release archive `x0ne-engine-<target>.tar.gz` and release `.deb` `x0ne-engine_amd64.deb` (`ci/deb-pack.sh`, the fields of `ci/deb/x0ne-engine.ctl`), the client binaries (`cargo auditable`, no feature, as the `.deb`) | `.github/workflows/release.yml`, `scripts/sbom.sh` in `rust:1.98.1-bookworm` | `/usr/local/cargo/registry/` |
 
 Panic messages carry the path of the crate that raised them: 519 strings under
 `/vendor/crates/` in the `x0ne-infer` of the CI image, 523 under the x0ne OS cargo

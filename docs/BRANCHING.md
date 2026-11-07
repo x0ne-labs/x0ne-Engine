@@ -41,6 +41,10 @@ pull request, squash-merged.
 workspace; tag `vX.Y.Z` equals it. Pre-releases: `-alpha.N`, `-beta.N`, `-rc.N`.
 
 1. Branch `chore/release-X.Y.Z` from `main`; `cargo release version X.Y.Z --execute`.
+   Set `VERSION="X.Y.Z"` in `install.sh`, `Version: X.Y.Z` (Debian form:
+   `0.2.0-beta.7` gives `0.2.0~beta.7`) in `ci/deb/x0ne-engine.ctl`, and the
+   tag in the README's Install section: the release workflow refuses a tag
+   that `install.sh` or the control file does not name.
 2. Move `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD` in `CHANGELOG.md`
    ([Keep a Changelog](https://keepachangelog.com/en/1.1.0/)); update `CITATION.cff` if present.
    Add `measurements/X.Y.Z.json` ([pinning.md](pinning.md)): the build
@@ -49,7 +53,8 @@ workspace; tag `vX.Y.Z` equals it. Pre-releases: `-alpha.N`, `-beta.N`, `-rc.N`.
 3. Pull request `chore: release vX.Y.Z`; squash-merge on green CI.
 4. On the updated `main`: `git tag -s vX.Y.Z -m vX.Y.Z && git tag -v vX.Y.Z`.
 5. `git push origin refs/tags/vX.Y.Z`; the release workflow builds, checksums
-   and attests the artifacts.
+   and attests the artifacts, installs the archive with `install.sh` and the
+   `.deb` with `dpkg` in four distributions, then drafts the release.
 6. Paste the `CHANGELOG.md` section into the GitHub release notes; check the
    artifacts download and verify.
 

@@ -5,10 +5,32 @@ the first non-beta tag will freeze the receipt protocol below.
 
 ## Unreleased
 
-## 0.2.0-beta.7 — 2026-11-05
+## 0.2.0-beta.7 — 2026-11-07
 
 This version's number was set on 2026-10-18, by the entries at the end of
-this section; the others landed until 2026-11-05.
+this section; the others landed until 2026-11-07.
+
+### Added
+
+- `install.sh` installs the client binaries of a GitHub release
+  (2026-11-07), with the contract of x0ne-Harness's installer: Linux x86_64
+  with glibc only, the archive and `SHA256SUMS` over https only, refused on
+  a missing or mismatching checksum, `gh attestation verify` when gh 2.56+
+  is logged in, `~/.local/bin`, no sudo, no other request. It installs the
+  release on its `VERSION` line (GitHub's `releases/latest` skips
+  pre-releases), takes `--version`, and runs the new `x0ne-engine` before
+  it replaces anything. `make install-check` tests it against fake releases
+  in Debian 13, Ubuntu 24.04, Fedora 43 and Alpine 3 containers
+  (`ci/tests/installer.sh`, `ci/install-matrix.sh`), and so does the
+  `ci-scripts` job.
+- The release workflow attaches `x0ne-engine_amd64.deb` and `install.sh`,
+  both in `SHA256SUMS` and attested (2026-11-07). The `.deb` ships the
+  archive's three binaries (`ci/deb-pack.sh`: the fields of
+  `ci/deb/x0ne-engine.ctl`, dpkg-deb, every date at `SOURCE_DATE_EPOCH`;
+  `ci/deb-verify.sh` checks it); the two builds must give the same `.deb`.
+  A new job installs the archive with `install.sh` and the `.deb` with
+  `dpkg` in four distributions before the draft. The tag must equal
+  `install.sh`'s `VERSION`.
 
 ### Security
 
