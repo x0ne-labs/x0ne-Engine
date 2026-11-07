@@ -64,29 +64,65 @@ workspace; tag `vX.Y.Z` equals it. Pre-releases: `-alpha.N`, `-beta.N`, `-rc.N`.
 7. Sign the checksum list with the release key, the one that signs the tag
    (`install.sh` pins its public half), and upload the signature to the draft.
    `install.sh` and the README's `.deb` steps refuse a release without
-   `SHA256SUMS.sig`. On the maintainer's machine, in a checkout of the tag
-   (gh finds the repository from its GitHub remote):
+   `SHA256SUMS.sig`. Whoever can change the draft's assets could put another
+   list there, with the right first line: the signature must go only on a
+   list the release workflow attested. So the block below, in one subshell
+   that stops at the first command that fails:
+   - downloads `SHA256SUMS` once, into a new directory;
+   - verifies the build provenance of that local file with
+     `gh attestation verify`: signed by `release.yml` of this repository,
+     built from the tag's ref and commit, on a GitHub-hosted runner;
+   - checks its first line, `# x0ne-Engine vX.Y.Z`;
+   - signs that same file, never a second download, and uploads the
+     signature (no `--clobber`: a `SHA256SUMS.sig` already in the draft
+     stops it);
+   - downloads both back into another new directory: the list must be the
+     bytes signed (`cmp`), start with the same line, and verify against the
+     key of `install.sh`, as the script does.
+
+   It needs gh 2.102.0 or later, git, and OpenSSH 8.1 or later. gh has had
+   `--source-ref` and `--source-digest` since 2.68.0, but before 2.97.0 it
+   matched `--signer-workflow` as an unescaped regular expression
+   ([GHSA-mm27-mwq9-fr5g](https://github.com/cli/cli/security/advisories/GHSA-mm27-mwq9-fr5g)),
+   and before 2.102.0 as a prefix of the workflow's identity, and compared
+   `--source-ref` case-insensitively
+   ([GHSA-wjmr-j3rp-mh2g](https://github.com/cli/cli/security/advisories/GHSA-wjmr-j3rp-mh2g),
+   [GHSA-4mq3-hpgx-9cx8](https://github.com/cli/cli/security/advisories/GHSA-4mq3-hpgx-9cx8)).
+   On the maintainer's machine, in a checkout of the tag:
 
    ```sh
-   d=$(mktemp -d) &&
-   gh release download vX.Y.Z --pattern SHA256SUMS --dir "$d" &&
-   test "$(head -n 1 "$d/SHA256SUMS")" = "# x0ne-Engine vX.Y.Z" &&
-   ssh-keygen -Y sign -f ~/.ssh/x0ne_signing -n x0ne-engine-release "$d/SHA256SUMS" &&
-   gh release upload vX.Y.Z "$d/SHA256SUMS.sig"
+   (
+     set -eu
+     tag=vX.Y.Z
+     repo=x0ne-labs/x0ne-Engine
+     gh --version | awk 'NR == 1 { split($3, v, "."); ok = v[1] + 0 > 2 || (v[1] + 0 == 2 && v[2] + 0 >= 102) } END { exit !ok }' ||
+       { echo "gh 2.102.0 or later is required" >&2; exit 1; }
+     commit=$(git rev-parse --verify "$tag^{commit}")
+     d=$(mktemp -d)
+     gh release download "$tag" -R "$repo" --pattern SHA256SUMS --dir "$d"
+     gh attestation verify "$d/SHA256SUMS" --repo "$repo" \
+       --signer-workflow "$repo/.github/workflows/release.yml" \
+       --source-ref "refs/tags/$tag" --source-digest "$commit" --deny-self-hosted-runners
+     first=$(head -n 1 "$d/SHA256SUMS")
+     test "$first" = "# x0ne-Engine $tag" || { echo "SHA256SUMS is not the list of $tag: $first" >&2; exit 1; }
+     ssh-keygen -Y sign -f ~/.ssh/x0ne_signing -n x0ne-engine-release "$d/SHA256SUMS"
+     gh release upload "$tag" -R "$repo" "$d/SHA256SUMS.sig"
+     v=$(mktemp -d)
+     gh release download "$tag" -R "$repo" --pattern SHA256SUMS --pattern SHA256SUMS.sig --dir "$v"
+     cmp "$d/SHA256SUMS" "$v/SHA256SUMS"
+     cmp "$d/SHA256SUMS.sig" "$v/SHA256SUMS.sig"
+     first=$(head -n 1 "$v/SHA256SUMS")
+     test "$first" = "# x0ne-Engine $tag" || { echo "SHA256SUMS is not the list of $tag: $first" >&2; exit 1; }
+     sed -n "s/^ALLOWED_SIGNER='\(.*\)'\$/\1/p" install.sh > "$v/allowed_signers"
+     test -s "$v/allowed_signers"
+     ssh-keygen -Y verify -f "$v/allowed_signers" -I dev@x0ne.co -n x0ne-engine-release \
+       -s "$v/SHA256SUMS.sig" < "$v/SHA256SUMS"
+   )
    ```
 
-   Then download both back from the draft into another new directory and
-   verify them against the key of `install.sh`, as the script does:
-
-   ```sh
-   v=$(mktemp -d) &&
-   gh release download vX.Y.Z --pattern SHA256SUMS --pattern SHA256SUMS.sig --dir "$v" &&
-   sed -n "s/^ALLOWED_SIGNER='\(.*\)'\$/\1/p" install.sh > "$v/allowed_signers" &&
-   ssh-keygen -Y verify -f "$v/allowed_signers" -I dev@x0ne.co -n x0ne-engine-release \
-     -s "$v/SHA256SUMS.sig" < "$v/SHA256SUMS"
-   ```
-
-   It prints `Good "x0ne-engine-release" signature for dev@x0ne.co`.
+   It ends with `Good "x0ne-engine-release" signature for dev@x0ne.co`.
+   Any other end: do not publish the draft. `ci/tests/installer.sh` replays
+   this block with a test key and a fake gh.
 8. Publish the draft.
 
 ## Vulnerabilities
