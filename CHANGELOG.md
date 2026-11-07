@@ -147,6 +147,11 @@ history: candle has been the CPU reference of the tests since 2026-11-04.
 
 ### Changes, newest first
 
+- A `memfd_secret` key is tested against `process_vm_readv(2)` as well as
+  `/proc/self/mem` (2026-11-07): the read fails with EFAULT, while a heap
+  buffer, the control, reads back. Measured on 6.12.115; with the key on an
+  ordinary memfd named `secretmem`, the read returned the key's bytes and the
+  test failed. The `mlock` fallback still has to carry `lo`, `dd` and `wf`.
 - The `memfd_secret` tests no longer pass on the `mlock` fallback where the
   kernel offers `memfd_secret` (2026-11-06). They ask the kernel for a
   descriptor themselves: where it gives one, a key in `mlock` memory fails,

@@ -816,4 +816,54 @@ mod tests {
             "secretmem read through /proc/self/mem: {buf:?}"
         );
     }
+
+    /// 32 bytes at `addr` of this process, read with `process_vm_readv(2)`.
+    #[cfg(target_os = "linux")]
+    fn process_vm_read(addr: *const u8) -> io::Result<[u8; 32]> {
+        let mut buf = [0u8; 32];
+        let local = libc::iovec {
+            iov_base: buf.as_mut_ptr().cast(),
+            iov_len: buf.len(),
+        };
+        let remote = libc::iovec {
+            iov_base: addr.cast_mut().cast(),
+            iov_len: buf.len(),
+        };
+        // SAFETY: `local` points at `buf`, which outlives the call; the kernel
+        // checks `remote` against this process's mappings itself.
+        let n = unsafe { libc::process_vm_readv(libc::getpid(), &local, 1, &remote, 1, 0) };
+        match usize::try_from(n) {
+            Ok(32) => Ok(buf),
+            Ok(_) => Err(io::ErrorKind::UnexpectedEof.into()),
+            Err(_) => Err(io::Error::last_os_error()),
+        }
+    }
+
+    /// `memfd_secret` pages refuse `process_vm_readv(2)`, the call a process
+    /// of the same user would make, even from this process (EFAULT); a heap
+    /// buffer, the control, reads back.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn secretmem_is_out_of_reach_of_process_vm_readv() {
+        let mut s = match SecretBytes::with_backing(32, Backing::SecretMem) {
+            Ok(s) => s,
+            Err(e) => {
+                if let Err(refused) = kernel_offers_memfd_secret() {
+                    eprintln!("memfd_secret refused here ({refused}): nothing to read");
+                    return;
+                }
+                panic!("the kernel offers memfd_secret, SecretBytes failed with it: {e}");
+            }
+        };
+        s.expose_mut().copy_from_slice(&[0x5a; 32]);
+        let control = Box::new([0x5au8; 32]);
+        let back = process_vm_read(control.as_ptr());
+        assert_eq!(back.ok(), Some([0x5a; 32]), "control: the heap reads back");
+        let got = process_vm_read(s.expose().as_ptr());
+        assert_eq!(
+            got.as_ref().map_err(io::Error::raw_os_error),
+            Err(Some(libc::EFAULT)),
+            "secretmem read through process_vm_readv: {got:?}"
+        );
+    }
 }
