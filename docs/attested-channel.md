@@ -68,9 +68,26 @@ key and refuses every reference, see
 Each of the relay's GETs to Intel (PCS, the root CA CRL) is made at most
 three times: again 1 s, then 2 s, after a transport error, a 5xx or a 429;
 never after another answer, nor after a document that does not parse. Each
-GET has 20 s, so one document takes 63 s at most. Three failures refuse as
+try has 20 s, so one GET takes 63 s at most. Three failures refuse as
 one did before (76), with the transport error's causes in the reason
 (`remote_verify::pcs_get`, since 2026-11-06).
+
+One verdict asks Intel and Google eight things, in three round trips
+(since 2026-11-10; they were eight GETs one after the other). First the QE
+identity alone: its `Date` header is the clock the rest is dated against,
+and nothing named by the quote is fetched before the quote is verified and
+bound to this channel. Then, together, what waits for no other answer:
+the tcbInfo, Intel's `early` tcbInfo and QE identity, the PCK CRL, the root
+CA CRL and Google's endorsement of the MRTD. Last, the firmware binary the
+verified endorsement names. The checks below run in the same order as
+before on the same answers, each answer read where it used to be fetched:
+when several GETs fail, the refusal is the one of the first check in that
+order, and a refusal drops the GETs not read yet. What changed besides the
+time is what Intel and Google see: up to five GETs to Intel at once, and
+GETs already sent for a document refused meanwhile
+(`collateral_abreast_tests.rs`). The TD's own live check (start-up and
+hourly, `tcb_standing::judge_platform_live`) asks its six together, and
+`sdk_collateral` seven then the firmware binary.
 
 Then, before anything but `GET /v2/attestation` and `GET
 /v2/attestation/session` reaches the TD, the relay checks on YOUR machine,
@@ -252,7 +269,16 @@ is paid per connection, not per request.
 After mutual TLS, a request head must be whole within 61 minutes of the
 handshake or of the previous answer's end; the TD closes the connection
 otherwise, slow or idle, and counts it (`head_timeouts`). An answer is not timed
-by this. The relay opens a new checked connection after such a close, but a
+by this. A chat request, sealed or not, takes its queue place when its head is
+read and then has 30 s to send its whole body (`server::BODY_TIMEOUT`): past
+it the request is refused and its place is free.
+
+The relay's local endpoint and the TD served directly (`x0ne-infer` without
+`--cloud-config`) bound the wait for a request head the same way, since
+2026-11-10: a connection whose next head is not whole within 61 minutes
+of its accept or of the previous answer's end is closed, and not counted.
+The bound is long for the reason above, on the local side: a client that
+keeps idle connections must not send a request into the close. The relay opens a new checked connection after such a close, but a
 request that leaves as its connection closes fails and loses the session
 (`cloud_e2e_tests::measure_a_request_racing_the_close_of_an_idle_connection`):
 the limit is long for that reason. It bounds what a peer can hold for ever, not

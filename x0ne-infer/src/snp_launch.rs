@@ -47,6 +47,17 @@ const SECTION_CPUID: u32 = 3;
 const SECTION_SVSM_CAA: u32 = 4;
 const SECTION_SNP_KERNEL_HASHES: u32 = 0x10;
 
+/// Sections one `ASEV` descriptor may list. The count is a u32 of the file.
+/// Measured on 2026-11-10: 6 in Debian 13's `OVMF.fd` and `OVMF_CODE_4M.fd`
+/// (ovmf 2025.02), 7 in an `AmdSevX64` build with the kernel hashes page; the
+/// format has five section types. The bound of `tdvf.rs`.
+pub const MAX_SECTIONS: u32 = 64;
+/// Memory one section may describe: each of its pages is one more SHA-384 of
+/// the launch digest, and the size is a u32 of the file. The largest section
+/// of those three builds is 64 KiB, and each describes 124 KiB in all. The
+/// bound of `tdvf.rs`.
+pub const MAX_SECTION_MEMORY: u64 = 64 * 1024 * 1024;
+
 // GUIDs of the OVMF footer table (OvmfPkg/ResetVector/Ia16/ResetVectorVtf0.asm).
 const OVMF_TABLE_FOOTER: &str = "96b582de-1fb2-45f7-baea-a366c55a082d";
 const SEV_HASH_TABLE_RV: &str = "7255371f-3a3b-4b04-927b-1da6efa8d454";
@@ -219,14 +230,27 @@ impl<'a> Ovmf<'a> {
             if sig != b"ASEV" || version != 1 {
                 return Err(bad("SEV metadata: not \"ASEV\" version 1"));
             }
+            if n > MAX_SECTIONS {
+                return Err(LaunchError::Firmware(format!(
+                    "SEV metadata lists {n} sections, this reader takes {MAX_SECTIONS}"
+                )));
+            }
             for i in 0..n as usize {
                 let at = start + 16 + 12 * i;
                 let field = |k: usize| le32(data, at + 4 * k).ok_or_else(|| bad("SEV metadata"));
-                ovmf.sections.push(Section {
+                let section = Section {
                     gpa: field(0)?,
                     size: field(1)?,
                     kind: field(2)?,
-                });
+                };
+                if u64::from(section.size) > MAX_SECTION_MEMORY {
+                    return Err(LaunchError::Firmware(format!(
+                        "SEV metadata section {i}: {:#x} bytes exceed the \
+                         {MAX_SECTION_MEMORY:#x} this reader measures",
+                        section.size
+                    )));
+                }
+                ovmf.sections.push(section);
             }
         }
         Ok(ovmf)
@@ -532,7 +556,7 @@ pub fn measure_files(a: &MeasureArgs) -> Result<String, String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// A deterministic byte stream: SHA-256(label ‖ counter), concatenated.
@@ -610,6 +634,44 @@ mod tests {
         let start = FW_SIZE - 32 - body.len();
         fw[start..FW_SIZE - 32].copy_from_slice(&body);
         fw[FW_SIZE - 32..].fill(0);
+        fw
+    }
+
+    /// Where [`fixture_listing`] puts its `ASEV` descriptor, and how many
+    /// sections fit between it and the footer table.
+    pub(crate) const LISTING_AT: usize = 0x1000;
+    pub(crate) const LISTING_ROOM: usize = (0x10_0000 - 0x1000 - LISTING_AT - 16) / 12;
+
+    /// A 1 MiB firmware whose `ASEV` descriptor says `count` sections, with
+    /// [`LISTING_ROOM`] of them written after it, the `i`th being
+    /// `section(i)` (address, size, type): a count beyond what any build
+    /// lists reads entries, not the end of the file.
+    pub(crate) fn fixture_listing(
+        count: u32,
+        section: impl Fn(usize) -> (u32, u32, u32),
+    ) -> Vec<u8> {
+        const SIZE: usize = 0x10_0000;
+        let mut fw = vec![0u8; SIZE];
+        let mut meta = b"ASEV".to_vec();
+        meta.extend_from_slice(&16u32.wrapping_add(count.wrapping_mul(12)).to_le_bytes());
+        meta.extend_from_slice(&1u32.to_le_bytes());
+        meta.extend_from_slice(&count.to_le_bytes());
+        for i in 0..LISTING_ROOM {
+            let (gpa, size, kind) = section(i);
+            for v in [gpa, size, kind] {
+                meta.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        fw[LISTING_AT..LISTING_AT + meta.len()].copy_from_slice(&meta);
+        let mut body = footer_entry(&0xFFFF_FD40u32.to_le_bytes(), SEV_ES_RESET_BLOCK);
+        body.extend(footer_entry(
+            &((SIZE - LISTING_AT) as u32).to_le_bytes(),
+            OVMF_SEV_METADATA,
+        ));
+        body.extend_from_slice(&((body.len() + 18) as u16).to_le_bytes());
+        body.extend_from_slice(&guid_le(OVMF_TABLE_FOOTER));
+        let start = SIZE - 32 - body.len();
+        fw[start..SIZE - 32].copy_from_slice(&body);
         fw
     }
 
@@ -829,6 +891,50 @@ mod tests {
             Err(LaunchError::Firmware(m)) if m.contains("reset block")
         ));
         assert_eq!(vcpu_signature("host"), None);
+    }
+
+    /// The descriptor's section count and each section's size come from the
+    /// file. The builds measured on 2026-11-10 list 6 sections (Debian 13's
+    /// `OVMF.fd` and `OVMF_CODE_4M.fd`) and 7 (our `AmdSevX64` build), the
+    /// largest of 64 KiB: at the bounds a firmware is measured, past them it
+    /// is refused before a page is hashed.
+    #[test]
+    fn a_descriptor_of_more_sections_or_memory_than_the_bounds_is_refused() {
+        let measure = |fw: &[u8]| {
+            launch_digest(&Launch {
+                ovmf: fw,
+                kernel: None,
+                initrd: None,
+                append: None,
+                vcpus: 1,
+                vcpu_sig: vcpu_signature("EPYC-Genoa").unwrap(),
+                guest_features: 1,
+            })
+        };
+        let page = |i: usize| (0x0080_0000 + 0x1000 * i as u32, 0x1000, SECTION_SNP_SEC_MEM);
+        let sized = |size: u32| move |_: usize| (0x0080_0000, size, SECTION_SNP_SEC_MEM);
+        let largest = u32::try_from(MAX_SECTION_MEMORY).unwrap();
+        let mut wrong = Vec::new();
+
+        if let Err(e) = measure(&fixture_listing(MAX_SECTIONS, page)) {
+            wrong.push(format!("{MAX_SECTIONS} sections of one page: {e}"));
+        }
+        for count in [MAX_SECTIONS + 1, 0xFFFF, LISTING_ROOM as u32, u32::MAX] {
+            match measure(&fixture_listing(count, page)) {
+                Err(LaunchError::Firmware(m)) if m.contains("sections") => {}
+                other => wrong.push(format!("{count} sections of one page: {other:?}")),
+            }
+        }
+        if let Err(e) = measure(&fixture_listing(1, sized(largest))) {
+            wrong.push(format!("one section of {largest:#x} bytes: {e}"));
+        }
+        for size in [largest + 1, largest + 0x1000, 0x8000_0000, 0xFFFF_F000] {
+            match measure(&fixture_listing(1, sized(size))) {
+                Err(LaunchError::Firmware(m)) if m.contains("exceed") => {}
+                other => wrong.push(format!("one section of {size:#x} bytes: {other:?}")),
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
     }
 
     /// Every input moves the digest: one flipped firmware byte, the kernel,

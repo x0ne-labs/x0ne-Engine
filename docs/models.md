@@ -23,8 +23,22 @@ wrong arithmetic answers fluent nonsense, not an error. Refused
 
 Testable with `make core-gpu` (`scripts/core-gpu.sh`) on an NVIDIA GPU: a
 conformance suite on Qwen3-0.6B and Qwen3-8B, the server's answers equal to
-x0ne Core's own greedy decoding on five prompts, and compute-sanitizer over
-the Qwen3-0.6B suite; no run of it is recorded in this repository. x0ne
+x0ne Core's own greedy decoding on five prompts, compute-sanitizer over
+the Qwen3-0.6B suite, every kernel and the engine against a CPU reference
+(`x0ne-core/oracle`) and a performance ratchet held to
+`ci/core-perf-baseline.json`, a regression ratchet for later runs on the same
+card, not a published benchmark: it holds one run, Qwen3-0.6B on an RTX 5090
+(2026-11-10). A run without a GPU marks those steps skipped
+(`out/core-gpu/<sha>.json`). Where the card is held for a microVM and no
+container can have it, `CORE_GPU_RUNNER` names a launcher that runs one
+program on the card (x0ne OS's `scripts/microvm-gpu-run.sh`; x0ne OS is not
+public yet): the GPU steps then run the binaries the build
+step left, one by one, through it. In that mode compute-sanitizer is not in
+the guest and its step is skipped unless a copy of the tool is given, the
+tests that need Qwen3-8B are named and left out when it is not given (the
+step is then skipped, not passed), and a launcher that reports the card
+lost stops the run, red (the header of `scripts/core-gpu.sh` has the
+details). x0ne
 Core's own tests, not this target, passed on an H100 in CC mode on
 2026-11-03 ([hardware-runs.md](hardware-runs.md)).
 

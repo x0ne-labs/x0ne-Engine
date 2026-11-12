@@ -3,11 +3,12 @@
 //! here needs the network; the binary refuses any non-loopback override.
 #![allow(dead_code)]
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::CStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd};
+use std::net::SocketAddr;
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
@@ -16,9 +17,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
-use axum::extract::State;
+use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
+use axum::serve::ListenerExt;
 use axum::Router;
 use serde_json::{json, Value};
 
@@ -39,8 +41,24 @@ pub fn fork_lock() -> MutexGuard<'static, ()> {
     FORK_LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Whether `needle` is in `hay`, by libc's `memmem`: every case searches the
+/// 37 MB binary linked into its directory ([`Env::files_containing`]), and a
+/// loop over `windows` compiled without optimisation took 0.4 s of each.
 pub fn contains(hay: &[u8], needle: &[u8]) -> bool {
-    !needle.is_empty() && hay.windows(needle.len()).any(|w| w == needle)
+    if needle.is_empty() {
+        return false;
+    }
+    // SAFETY: both pointers come from live slices, each with its own length;
+    // memmem reads no byte past either and keeps neither pointer.
+    let at = unsafe {
+        libc::memmem(
+            hay.as_ptr().cast(),
+            hay.len(),
+            needle.as_ptr().cast(),
+            needle.len(),
+        )
+    };
+    !at.is_null()
 }
 
 // ── the fake cloud ──────────────────────────────────────────────────────────
@@ -91,8 +109,100 @@ pub enum QuotaInfo {
     Dims(Vec<(Option<&'static str>, Option<&'static str>)>),
 }
 
+/// What the fake does to one request instead of answering it as Google would.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fault {
+    /// An error envelope with this HTTP status; the request is not carried out.
+    Status(u16),
+    /// The connection is reset before any answer; the request is not carried out.
+    Reset,
+    /// The request is carried out, then the connection is reset: its answer is lost.
+    LostAnswer,
+    /// No answer for [`STALL`], longer than any client timeout a test sets;
+    /// the request is not carried out.
+    Stall,
+    /// The request is carried out; its answer says 200 and stops in the
+    /// middle of its body.
+    Truncated,
+    /// 200 with a page that is not JSON (a proxy's); the request is not carried out.
+    Garbage,
+    /// The operation the request starts ends in error; nothing is carried out.
+    OpError,
+    /// The operation the request starts never ends. The worse case of each:
+    /// an insert is carried out, a delete is not.
+    OpNever,
+}
+
+/// Which requests a [`Fault`] falls on. Counted from the last [`FakeGcp::arm`]
+/// (from the start for a `Cloud` built with its injections).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum When {
+    /// The n-th request the fake receives, from 1, whatever it is.
+    Request(usize),
+    /// The n-th request, from 1, that starts a Compute operation (POST, DELETE).
+    Operation(usize),
+    /// The next `times` requests of `method` whose path contains `part`.
+    Next {
+        method: &'static str,
+        part: &'static str,
+        times: usize,
+    },
+    /// The `nth` request, whatever it is, counted from the first `method`
+    /// request whose path contains `part` (that one is 0).
+    After {
+        method: &'static str,
+        part: &'static str,
+        nth: usize,
+        started: bool,
+    },
+}
+
+impl When {
+    pub fn after(method: &'static str, part: &'static str, nth: usize) -> When {
+        When::After {
+            method,
+            part,
+            nth,
+            started: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Injection {
+    pub when: When,
+    pub fault: Fault,
+}
+
+/// A fault that fell: on which request (from 1, all requests counted).
+#[derive(Debug, Clone)]
+pub struct Injected {
+    pub request: usize,
+    pub fault: Fault,
+    pub method: String,
+    pub path: String,
+}
+
+/// How long a stalled request stays unanswered.
+pub const STALL: Duration = Duration::from_secs(45);
+
 pub struct Cloud {
     pub requests: Vec<Req>,
+    /// Faults to come, and those that fell.
+    pub inject: Vec<Injection>,
+    pub injected: Vec<Injected>,
+    /// Requests and operation-starting requests received before the last `arm`.
+    pub armed_at: (usize, usize),
+    /// Requests that started (or would have started) a Compute operation.
+    pub op_requests: usize,
+    /// Operations that stay RUNNING for ever.
+    pub stuck_ops: HashSet<String>,
+    /// The name of the last operation started.
+    pub last_op: Option<String>,
+    /// What `machineTypes.get` answers for a3-highgpu-1g; None: Google's shape.
+    pub machine_type: Option<Value>,
+    /// The VM delete operation stays RUNNING while set (the VM is gone).
+    pub hold_vm_delete: bool,
     /// PREEMPTIBLE_NVIDIA_H100_GPUS of regions.get, listed only when `legacy_h100`.
     pub quotas: HashMap<String, (f64, f64)>,
     pub legacy_h100: bool,
@@ -125,6 +235,8 @@ pub struct Cloud {
     /// (code, message) of a failed VM insert operation.
     pub insert_error: Option<(String, String)>,
     pub fail_vm_delete: bool,
+    /// This many VM deletes answer 503 before one is served.
+    pub vm_delete_faults: u32,
     pub serial: String,
     /// Appended to `serial`, one piece per read of the serial port.
     pub serial_more: Vec<String>,
@@ -236,6 +348,14 @@ impl Default for Cloud {
             .collect();
         Cloud {
             requests: Vec::new(),
+            inject: Vec::new(),
+            injected: Vec::new(),
+            armed_at: (0, 0),
+            op_requests: 0,
+            stuck_ops: HashSet::new(),
+            last_op: None,
+            machine_type: None,
+            hold_vm_delete: false,
             quotas,
             legacy_h100: true,
             region_quotas,
@@ -257,6 +377,7 @@ impl Default for Cloud {
             hold_image_insert: false,
             insert_error: None,
             fail_vm_delete: false,
+            vm_delete_faults: 0,
             serial:
                 "SeaBIOS\nTDX guest boot\n\x1b[2J\x1b]0;evil title\x07kernel panic: SERIAL-MARKER\n"
                     .into(),
@@ -305,12 +426,69 @@ pub struct FakeGcp {
     stop: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
+/// The fake's state and its open connections, by the client's address: a
+/// transport fault is done on the socket itself.
+#[derive(Clone)]
+struct Shared {
+    cloud: Arc<Mutex<Cloud>>,
+    conns: Arc<Mutex<HashMap<SocketAddr, RawFd>>>,
+}
+
+impl Shared {
+    fn fd(&self, peer: SocketAddr) -> Option<RawFd> {
+        self.conns
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&peer)
+            .copied()
+    }
+
+    /// A TCP reset, now: `connect` to AF_UNSPEC disconnects the socket.
+    fn reset(&self, peer: SocketAddr) {
+        let Some(fd) = self.fd(peer) else { return };
+        // SAFETY: the handler of this connection is running, so its socket is
+        // open; a zeroed sockaddr is AF_UNSPEC.
+        unsafe {
+            let sa: libc::sockaddr = std::mem::zeroed();
+            libc::connect(
+                fd,
+                &sa,
+                std::mem::size_of::<libc::sockaddr>() as libc::socklen_t,
+            );
+        }
+    }
+
+    /// A 200 that promises `body` whole and sends its first half, then closes.
+    fn truncate(&self, peer: SocketAddr, body: &[u8]) {
+        let Some(fd) = self.fd(peer) else { return };
+        let body: &[u8] = if body.len() < 2 {
+            br#"{"kind": "compute#operation", "name": "operation-cut"}"#
+        } else {
+            body
+        };
+        let mut wire = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        wire.extend_from_slice(&body[..body.len() / 2]);
+        // SAFETY: as in `reset`; write and shutdown on an open socket.
+        unsafe {
+            libc::write(fd, wire.as_ptr().cast(), wire.len());
+            libc::shutdown(fd, libc::SHUT_RDWR);
+        }
+    }
+}
+
 impl FakeGcp {
     pub fn start(cloud: Cloud) -> FakeGcp {
         let cloud = Arc::new(Mutex::new(cloud));
         let (addr_tx, addr_rx) = std::sync::mpsc::channel();
         let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
-        let state = cloud.clone();
+        let state = Shared {
+            cloud: cloud.clone(),
+            conns: Arc::new(Mutex::new(HashMap::new())),
+        };
         std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -325,9 +503,18 @@ impl FakeGcp {
                     }
                 };
                 addr_tx.send(l.local_addr().unwrap()).unwrap();
-                tokio::spawn(fake_name_server(udp, state.clone()));
+                tokio::spawn(fake_name_server(udp, state.cloud.clone()));
+                let conns = state.conns.clone();
+                let l = l.tap_io(move |io| {
+                    if let Ok(peer) = io.peer_addr() {
+                        conns
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .insert(peer, io.as_raw_fd());
+                    }
+                });
                 let app = Router::new().fallback(handle).with_state(state);
-                let _ = axum::serve(l, app)
+                let _ = axum::serve(l, app.into_make_service_with_connect_info::<SocketAddr>())
                     .with_graceful_shutdown(async {
                         let _ = stop_rx.await;
                     })
@@ -348,6 +535,19 @@ impl FakeGcp {
 
     pub fn requests(&self) -> Vec<Req> {
         self.with(|c| c.requests.clone())
+    }
+
+    /// Replaces the faults to come; `When` counts from this call.
+    pub fn arm(&self, inject: Vec<Injection>) {
+        self.with(|c| {
+            c.armed_at = (c.requests.len(), c.op_requests);
+            c.inject = inject;
+        });
+    }
+
+    /// The faults that fell so far.
+    pub fn injected(&self) -> Vec<Injected> {
+        self.with(|c| c.injected.clone())
     }
 
     pub fn find(&self, method: &str, path_suffix: &str) -> Vec<Req> {
@@ -426,30 +626,212 @@ fn query_param(q: &str, key: &str) -> Option<String> {
 }
 
 async fn handle(
-    State(c): State<Arc<Mutex<Cloud>>>,
+    State(s): State<Shared>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     method: Method,
     uri: Uri,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let mut c = c.lock().unwrap_or_else(|e| e.into_inner());
-    let r = Req {
-        method: method.to_string(),
-        path: uri.path().to_string(),
-        query: uri.query().unwrap_or("").to_string(),
-        body: body.to_vec(),
-        auth: headers
-            .get("authorization")
+    let (fault, answer) = {
+        let mut c = s.cloud.lock().unwrap_or_else(|e| e.into_inner());
+        let r = Req {
+            method: method.to_string(),
+            path: uri.path().to_string(),
+            query: uri.query().unwrap_or("").to_string(),
+            body: body.to_vec(),
+            auth: headers
+                .get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .map(String::from),
+        };
+        c.requests.push(r.clone());
+        let host = headers
+            .get("host")
             .and_then(|v| v.to_str().ok())
-            .map(String::from),
+            .unwrap_or("")
+            .to_string();
+        let fault = fault_for(&mut c, &r);
+        let answer = match fault {
+            None | Some(Fault::LostAnswer | Fault::Truncated) => {
+                Some(route(&mut c, &r, &headers, &host))
+            }
+            Some(Fault::OpNever) if r.method == "POST" => {
+                c.last_op = None;
+                let answer = route(&mut c, &r, &headers, &host);
+                if let Some(op) = c.last_op.clone() {
+                    c.stuck_ops.insert(op);
+                }
+                Some(answer)
+            }
+            Some(Fault::OpNever) => {
+                let scope = op_scope(&r.path);
+                let answer = new_op(
+                    &mut c,
+                    "stuck",
+                    scope.as_ref().map(|(k, v)| (*k, v.as_str())),
+                    None,
+                );
+                if let Some(op) = c.last_op.clone() {
+                    c.stuck_ops.insert(op);
+                }
+                Some(answer)
+            }
+            Some(Fault::OpError) => {
+                let scope = op_scope(&r.path);
+                let err = json!({"errors": [{"code": "INTERNAL_ERROR",
+                    "message": "Internal error. Please try again or contact Google Support."}]});
+                Some(new_op(
+                    &mut c,
+                    "failed",
+                    scope.as_ref().map(|(k, v)| (*k, v.as_str())),
+                    Some(err),
+                ))
+            }
+            Some(Fault::Status(code)) => Some(error_envelope(code)),
+            Some(Fault::Garbage) => Some(
+                (
+                    StatusCode::OK,
+                    [("content-type", "text/html")],
+                    "<html><body><h1>Sign in to the network</h1></body></html>",
+                )
+                    .into_response(),
+            ),
+            Some(Fault::Reset | Fault::Stall) => None,
+        };
+        (fault, answer)
     };
-    c.requests.push(r.clone());
-    let host = headers
-        .get("host")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_string();
-    route(&mut c, &r, &headers, &host)
+    match fault {
+        Some(Fault::Reset | Fault::LostAnswer) => {
+            s.reset(peer);
+            empty(500)
+        }
+        Some(Fault::Stall) => {
+            tokio::time::sleep(STALL).await;
+            empty(504)
+        }
+        Some(Fault::Truncated) => {
+            let whole = match answer {
+                Some(a) => axum::body::to_bytes(a.into_body(), 1 << 20)
+                    .await
+                    .unwrap_or_default(),
+                None => Bytes::new(),
+            };
+            s.truncate(peer, &whole);
+            empty(500)
+        }
+        _ => answer.unwrap_or_else(|| empty(500)),
+    }
+}
+
+/// Whether `r` starts a Compute operation: every POST and DELETE of compute v1.
+fn starts_operation(r: &Req) -> bool {
+    r.path.starts_with("/compute/v1/") && (r.method == "POST" || r.method == "DELETE")
+}
+
+/// The scope of the operation a request on `path` starts.
+fn op_scope(path: &str) -> Option<(&'static str, String)> {
+    let segs: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+    match segs.get(4..6) {
+        Some(["zones", z]) => Some(("zone", (*z).to_string())),
+        Some(["regions", rg]) => Some(("region", (*rg).to_string())),
+        _ => None,
+    }
+}
+
+/// The fault that falls on `r`, if one does; it is recorded and spent.
+fn fault_for(c: &mut Cloud, r: &Req) -> Option<Fault> {
+    let op = starts_operation(r);
+    if op {
+        c.op_requests += 1;
+    }
+    let n = c.requests.len() - c.armed_at.0;
+    let n_op = c.op_requests - c.armed_at.1;
+    let mut hit = None;
+    for (at, i) in c.inject.iter_mut().enumerate() {
+        let falls = match &mut i.when {
+            When::Request(k) => *k == n,
+            When::Operation(k) => op && *k == n_op,
+            When::Next {
+                method,
+                part,
+                times,
+            } => *times > 0 && r.method == *method && r.path.contains(*part),
+            When::After {
+                method,
+                part,
+                nth,
+                started,
+            } => {
+                *started = *started || (r.method == *method && r.path.contains(*part));
+                if *started && *nth > 0 {
+                    *nth -= 1;
+                    false
+                } else {
+                    *started
+                }
+            }
+        };
+        if falls && hit.is_none() {
+            hit = Some(at);
+        }
+    }
+    let hit = hit?;
+    let fault = c.inject[hit].fault;
+    let spent = match &mut c.inject[hit].when {
+        When::Next { times, .. } => {
+            *times -= 1;
+            *times == 0
+        }
+        _ => true,
+    };
+    if spent {
+        c.inject.remove(hit);
+    }
+    // An operation fault on a request that starts none has nothing to act on.
+    if matches!(fault, Fault::OpError | Fault::OpNever) && !op {
+        return None;
+    }
+    c.injected.push(Injected {
+        request: c.requests.len(),
+        fault,
+        method: r.method.clone(),
+        path: r.path.clone(),
+    });
+    Some(fault)
+}
+
+/// Google's error envelope for an HTTP status.
+fn error_envelope(code: u16) -> Response {
+    let (status, reason, message) = match code {
+        401 => (
+            "UNAUTHENTICATED",
+            "authError",
+            "Request had invalid authentication credentials.",
+        ),
+        403 => (
+            "PERMISSION_DENIED",
+            "forbidden",
+            "The caller does not have permission",
+        ),
+        404 => ("NOT_FOUND", "notFound", "The resource was not found"),
+        429 => (
+            "RESOURCE_EXHAUSTED",
+            "rateLimitExceeded",
+            "Rate Limit Exceeded",
+        ),
+        503 => (
+            "UNAVAILABLE",
+            "backendError",
+            "The service is currently unavailable.",
+        ),
+        _ => ("INTERNAL", "backendError", "Internal error"),
+    };
+    reply(
+        code,
+        json!({"error": {"code": code, "message": message, "status": status,
+                         "errors": [{"reason": reason}]}}),
+    )
 }
 
 fn route(c: &mut Cloud, r: &Req, headers: &HeaderMap, host: &str) -> Response {
@@ -574,6 +956,7 @@ fn new_op(
         done["error"] = e;
         done["httpErrorStatusCode"] = json!(503);
     }
+    c.last_op = Some(name.clone());
     c.ops.insert(name, (kind.to_string(), done));
     reply(200, v)
 }
@@ -582,7 +965,9 @@ fn get_op(c: &Cloud, name: &str) -> Response {
     match c.ops.get(name) {
         Some((kind, _))
             if (kind == "vm-insert" && c.hold_vm_insert)
-                || (kind == "image-insert" && c.hold_image_insert) =>
+                || (kind == "vm-delete" && c.hold_vm_delete)
+                || (kind == "image-insert" && c.hold_image_insert)
+                || c.stuck_ops.contains(name) =>
         {
             let mut v = c.ops[name].1.clone();
             v["status"] = json!("RUNNING");
@@ -629,8 +1014,10 @@ fn compute(c: &mut Cloud, r: &Req, rest: &[&str]) -> Response {
         }
         ("GET", ["zones", _z, "machineTypes", mt]) if *mt == "a3-highgpu-1g" => reply(
             200,
-            json!({"name": mt, "guestCpus": 26, "memoryMb": 239616,
-                   "accelerators": [{"guestAcceleratorType": "nvidia-h100-80gb", "guestAcceleratorCount": 1}]}),
+            c.machine_type.clone().unwrap_or_else(|| {
+                json!({"name": mt, "guestCpus": 26, "memoryMb": 239616,
+                       "accelerators": [{"guestAcceleratorType": "nvidia-h100-80gb", "guestAcceleratorCount": 1}]})
+            }),
         ),
         ("GET", ["global", "networks", "default"]) => reply(200, json!({"name": "default"})),
         ("GET", ["global", "images", name]) => match c.images.get(*name) {
@@ -710,6 +1097,40 @@ fn compute(c: &mut Cloud, r: &Req, rest: &[&str]) -> Response {
             200,
             json!({ "items": c.firewalls.values().cloned().collect::<Vec<_>>() }),
         ),
+        ("GET", ["global", "firewalls", name]) => match c.firewalls.get(*name) {
+            Some(fw) => reply(200, fw.clone()),
+            None => not_found(),
+        },
+        ("GET", ["zones", z, "disks", name]) => {
+            match c
+                .disks
+                .iter()
+                .find(|(dz, d)| dz == z && d["name"].as_str() == Some(*name))
+            {
+                Some((_, d)) => reply(200, d.clone()),
+                None => not_found(),
+            }
+        }
+        ("GET", ["regions", rg, "addresses", name]) => {
+            match c
+                .addresses
+                .iter()
+                .find(|(l, a)| l == rg && a["name"].as_str() == Some(*name))
+            {
+                Some((_, a)) => reply(200, a.clone()),
+                None => not_found(),
+            }
+        }
+        ("GET", ["global", "addresses", name]) => {
+            match c
+                .addresses
+                .iter()
+                .find(|(l, a)| l == "global" && a["name"].as_str() == Some(*name))
+            {
+                Some((_, a)) => reply(200, a.clone()),
+                None => not_found(),
+            }
+        }
         ("POST", ["global", "firewalls"]) => {
             let body = r.json();
             let name = body["name"].as_str().unwrap_or("").to_string();
@@ -791,6 +1212,14 @@ fn compute(c: &mut Cloud, r: &Req, rest: &[&str]) -> Response {
                 return reply(
                     500,
                     json!({"error": {"code": 500, "message": "Internal error \u{1b}[31m",
+                                                    "errors": [{"reason": "backendError"}]}}),
+                );
+            }
+            if c.vm_delete_faults > 0 {
+                c.vm_delete_faults -= 1;
+                return reply(
+                    503,
+                    json!({"error": {"code": 503, "message": "The service is currently unavailable.",
                                                     "errors": [{"reason": "backendError"}]}}),
                 );
             }
@@ -898,6 +1327,10 @@ fn storage(c: &mut Cloud, r: &Req, rest: &[&str]) -> Response {
             c.buckets.insert(name, body.clone());
             reply(200, body)
         }
+        ("GET", ["b", bucket]) => match c.buckets.get(*bucket) {
+            Some(b) => reply(200, b.clone()),
+            None => not_found(),
+        },
         ("DELETE", ["b", bucket]) => {
             if c.objects.get(*bucket).is_some_and(|o| !o.is_empty()) {
                 return reply(
@@ -1768,6 +2201,16 @@ impl Pty {
         }
     }
 
+    /// The terminal's input, output, control and local modes.
+    pub fn modes(&self) -> [libc::tcflag_t; 4] {
+        // SAFETY: tcgetattr fills a plain struct.
+        unsafe {
+            let mut t: libc::termios = std::mem::zeroed();
+            assert_eq!(libc::tcgetattr(self.slave.as_raw_fd(), &mut t), 0);
+            [t.c_iflag, t.c_oflag, t.c_cflag, t.c_lflag]
+        }
+    }
+
     pub fn echo_on(&self) -> bool {
         // SAFETY: tcgetattr fills a plain struct.
         unsafe {
@@ -1825,6 +2268,93 @@ pub fn golden(name: &str) -> Value {
         .join("tests/golden")
         .join(name);
     serde_json::from_slice(&fs::read(&p).unwrap()).unwrap()
+}
+
+// ── fixtures shared by the test files ───────────────────────────────────────
+
+/// A project that holds what earlier sessions left (a VM and its disk, two
+/// addresses, a rule, a transit bucket with its object) among resources that
+/// are not this tool's: each lacks the prefix, the label, the mark or the tag.
+pub fn crowded_cloud() -> Cloud {
+    let ours = json!({"x0ne-engine": "session"});
+    let mut c = Cloud::default();
+    let vm = |status: &str, labels: serde_json::Value| Vm {
+        zone: "us-central1-a".into(),
+        status: status.into(),
+        labels,
+        gets: 100,
+    };
+    c.vms
+        .insert("x0ne-engine-a1b2c3".into(), vm("TERMINATED", ours.clone()));
+    c.vms
+        .insert("x0ne-engine-nolabel".into(), vm("TERMINATED", json!({})));
+    c.vms.insert("web-1".into(), vm("RUNNING", ours.clone()));
+    c.disks = vec![
+        (
+            "us-central1-a".into(),
+            json!({"name": "x0ne-engine-a1b2c3", "sizeGb": "200", "labels": ours}),
+        ),
+        (
+            "us-central1-a".into(),
+            json!({"name": "x0ne-engine-data", "sizeGb": "10"}),
+        ),
+        (
+            "europe-west4-c".into(),
+            json!({"name": "db-disk", "sizeGb": "10", "labels": {"x0ne-engine": "x"}}),
+        ),
+    ];
+    c.addresses = vec![
+        (
+            "us-central1".into(),
+            json!({"name": "x0ne-engine-ip1", "status": "RESERVED", "labels": ours}),
+        ),
+        (
+            "global".into(),
+            json!({"name": "x0ne-engine-gip", "status": "RESERVED", "labels": ours}),
+        ),
+        (
+            "us-central1".into(),
+            json!({"name": "x0ne-engine-foreign", "status": "IN_USE"}),
+        ),
+    ];
+    let mut fw = |v: serde_json::Value| {
+        c.firewalls
+            .insert(v["name"].as_str().unwrap().to_string(), v);
+    };
+    fw(
+        json!({"name": "x0ne-engine-a1b2c3", "description": "x0ne-engine session a1b2c3: tcp:443 to this session's VM only",
+              "targetTags": ["x0ne-engine-a1b2c3"]}),
+    );
+    fw(
+        json!({"name": "x0ne-engine-allow", "description": "hand-made rule", "targetTags": ["x0ne-engine-allow"]}),
+    );
+    fw(
+        json!({"name": "x0ne-engine-b1b2b3", "description": "x0ne-engine session b1b2b3: tcp:443",
+              "targetTags": ["web"]}),
+    );
+    fw(
+        json!({"name": "default-allow-ssh", "description": "x0ne-engine session x", "targetTags": ["default-allow-ssh"]}),
+    );
+    c.buckets.insert(
+        "x0ne-engine-import-0123456789ab".into(),
+        json!({"name": "x0ne-engine-import-0123456789ab", "location": "US-CENTRAL1", "labels": {"x0ne-engine": "import"}}),
+    );
+    c.objects
+        .entry("x0ne-engine-import-0123456789ab".into())
+        .or_default()
+        .insert("x0ne-cvm-0-1-0.tar.gz".into(), 10);
+    c.buckets.insert(
+        "x0ne-engine-backups".into(),
+        json!({"name": "x0ne-engine-backups", "location": "EU"}),
+    );
+    c
+}
+
+/// A file named as a disk archive, `bytes` long.
+pub fn disk_tar(env: &Env, bytes: usize) -> std::path::PathBuf {
+    let p = env.path("disk.tar.gz");
+    fs::write(&p, (0..bytes).map(|i| (i % 251) as u8).collect::<Vec<_>>()).unwrap();
+    p
 }
 
 // ── assertions shared by the test files ─────────────────────────────────────

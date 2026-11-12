@@ -35,6 +35,8 @@ Dates are UTC.
   where.
 - One request at a time, BF16 weights, greedy decoding (temperature 0 or
   absent, [api.md](api.md)). No figure here is a throughput under load.
+- `make bench` ([The suite](#the-suite-make-bench)) measures a local GPU
+  without confidential computing. None of its numbers is on this page.
 
 ## Method
 
@@ -281,3 +283,95 @@ each answer, `usage`, `finish_reason` and the receipt fields named in
   only check that a build gives the same text to the same prompt.
 - **A published release.** Every Engine here was built from sources at the
   dates given, with versions 0.2.0-beta.5 to 0.2.0-beta.7; none is a tag.
+
+## The suite: make bench
+
+`make bench` (`scripts/bench.sh`) measures this Engine on the local NVIDIA
+GPU, tier by tier, and writes a verdict, `out/bench/<sha>.json`, and its
+report, `out/bench/<sha>.md` (`<sha>+dirty` for a tree that is not its
+commit's; `latest.json` and `latest.md` point at the last). Its GPU runs
+without confidential computing, so no figure it measures goes on this page:
+they are the numbers of one machine and one run, said with its GPU, driver,
+host, runner, image and settings in the verdict.
+
+The tiers (`BENCH_STEPS`, default all of them, in this order):
+
+- **build**: x0ne-infer's lib test binary (release, `--features cuda`) and
+  x0ne Core's `core-bench`, in a container with nvcc. Nothing on the card.
+- **core**: x0ne Core alone (`x0ne-core/oracle/examples/core-bench.rs`), per
+  model: for each length (`short`, `1k`, `4k`, `8k`, `16k`, and `max`, the
+  largest context the card holds; `short`, `1k`, `4k` for a mixture of
+  experts) the time to the first token and the prefill and decode rates of
+  `Engine::greedy_timed`; a cold load and a second one; the arena and the
+  device memory taken. A context the card refuses for memory is tried
+  smaller, and written down. The ids are the prompt kit's `<name>.ids.json`
+  (the chat template applied; `1k` is the first 1024 of `4k`), or drawn from
+  a fixed seed for `max` and a length without a file.
+- **engine**: the kit's chat prompts (`<name>.chat.json`) through the server
+  of x0ne-infer's unit tests on x0ne Core (`bench_tests::gpu::engine`),
+  streamed and whole, at the production tick (100 ms) and at the tests' short
+  tick (5 ms). The report gives the stream's time to its first token minus
+  core's for the same ids: HTTP, the chat template and the tokenizer,
+  admission, and the wait for the next tick.
+- **load**: 1, 2, 4, 8, 16 and 32 clients, 30 s each, each sending again as
+  soon as its answer ends, against one server that lets 8 wait and answers
+  503 with `Retry-After` past them (`bench_tests::gpu::load`): time to the
+  first token and response time at p50, p95 and p99 (nearest rank), tokens
+  per second over all answers, the share of 503 and their `Retry-After`,
+  Jain's index of the answers per client, and FIFO inversions (pairs of
+  requests that waited together and whose first tokens came in the other
+  order than their sending).
+- **soak**: 4 clients for 10 minutes (`BENCH_SOAK_MIN`, 60 possible):
+  throughput per 60 s window, its drift (the last window against the
+  first), the least-squares slope through every window per hour, the
+  process's resident memory and the device memory at each window's end, and
+  errors.
+- **baseline**: llama.cpp's `llama-server` on core's ids
+  (`bench_tests::baseline_llama`, `BENCH_LLAMA_SERVER`,
+  `BENCH_GGUF_<MODEL>`). A comparison, never a reference: the report sets
+  its rates beside core's only when the GGUF was made from the same model
+  directory (`BENCH_GGUF_<MODEL>_FROM`), is BF16, core decoded as many
+  tokens, and a length has the same ids in both. Otherwise it says why not.
+
+Each number of core and engine is the median of `BENCH_REPS` (5)
+repetitions after a first pass reported apart, with the smallest, the
+largest, the mean and the standard deviation; 256 tokens decoded
+(`BENCH_DECODE`), greedy. Every program prints one line
+`x0ne-bench-result: <JSON>` (schema 1, `kind` its tier); `scripts/bench.sh`
+keeps it whole in its run of the verdict.
+
+**The verdict.** A run (a tier and a model) is `ok`, `fail` or `skipped`,
+with its reason. A model not given is skipped with the variable it needs; a
+model the card cannot hold is skipped, "refused on this card"; a model the
+server cannot serve (a mixture of experts, no `tokenizer.json`) is skipped
+for the server's tiers. The status is `red` (a run failed, or the card was
+lost; exit 1), `partial` (a run skipped, or measured without a reference;
+exit 3, never green) or `green` (exit 0); 2 is a usage error. The repetitions
+of core giving other tokens, an error of the server, or a 503 without
+`Retry-After` fail their run whatever the numbers.
+
+**The reference.** `ci/bench-baseline.json` holds, per GPU name, the metrics
+of a recorded run. A rate (a metric named `*_tok_s` or `*_per_s`) lower, or a
+time higher, than its reference by more than its tier's `tolerance_pct`
+fails the run, reason "below the reference". `scripts/bench.sh update
+VERDICT` records a clean run whose metrics hold, keeping the better of the
+old and the new value of each; `--replace` writes the run as it is. The
+tolerances (5 % for core, 10 % for engine, 15 % for load and soak) are
+placeholders until the first run on the card: to be set from the spread it
+shows.
+
+**Not measured by the suite:**
+
+- TDX: no trust domain, no quote, no private memory. The server is the unit
+  tests' one, with their proof; its client is in the same process, over
+  loopback. The relay, the attested channel and the network between a
+  client and the server are not in any of its numbers.
+- Confidential computing on the GPU.
+- The decode rate of a stream is from its first content to its last, and a
+  tick quantizes it: each frame carries what came during its tick.
+- The resident memory of the soak is that of the test process: the server,
+  the host side of the model and the clients together. The device memory is
+  the whole device's, as `cuMemGetInfo` gives it, the reading's own CUDA
+  context included.
+- Sampling other than greedy, quantized weights, and the quality of the
+  answers.

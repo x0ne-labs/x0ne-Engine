@@ -2,10 +2,11 @@
 # (PROVENANCE.md). Not members of the Engine workspace: the kernels are
 # compiled by nvcc, which the default build and its CI do not have. This
 # manifest is Engine's: x0ne Core's workspace values, with the license of
-# the server (LICENSING.md) and only the two crates as members.
+# the server (LICENSING.md), the two crates as members, and `oracle`, written here: the CPU
+# reference and the tests of the copy (the runtime's dev-dependency resolves to it).
 [workspace]
 resolver = "2"
-members = ["kernels", "runtime"]
+members = ["kernels", "runtime", "oracle"]
 
 [workspace.package]
 version = "0.0.1"
@@ -21,3 +22,10 @@ memmap2 = "=0.9.11"
 safetensors = "=0.8.0"
 serde_json = "=1.0.151"
 sha2 = "=0.10.9"
+
+# The tests run the CPU reference over whole sequences: optimized, with the checks of a debug
+# build (x0ne Core's test profile). No shipped binary is built from this workspace.
+[profile.test]
+opt-level = 3
+debug-assertions = true
+overflow-checks = true

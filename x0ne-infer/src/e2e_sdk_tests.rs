@@ -2822,7 +2822,10 @@ async fn the_c_abi_takes_the_callers_log_checkpoint_and_returns_the_one_to_keep(
     // One entry: the reference. The first sight is kept.
     let mut log = TestLog::new();
     log.append(json.as_bytes());
-    let v = verify(policy_with(log.proof(0, now())), None, None);
+    // One instant for the two proofs of this size: the witness dates its cosignature, and the
+    // note kept is compared whole below.
+    let first = now();
+    let v = verify(policy_with(log.proof(0, first)), None, None);
     assert_eq!(v["ok"], true, "{v}");
     let memory = &v["verified"]["reference"]["log"]["memory"];
     assert_eq!(
@@ -2839,7 +2842,7 @@ async fn the_c_abi_takes_the_callers_log_checkpoint_and_returns_the_one_to_keep(
         "{kept}"
     );
     // The same checkpoint, remembered: nothing to prove.
-    let v = verify(policy_with(log.proof(0, now())), Some(&kept), None);
+    let v = verify(policy_with(log.proof(0, first)), Some(&kept), None);
     assert_eq!(v["ok"], true, "{v}");
     let memory = &v["verified"]["reference"]["log"]["memory"];
     assert_eq!(

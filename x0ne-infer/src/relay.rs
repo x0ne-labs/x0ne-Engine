@@ -204,6 +204,26 @@ fn control(cmd: Option<Cmd>) -> Step<()> {
     }
 }
 
+/// Drives `work` to its result while reading the control channel. A command
+/// that is ignored leaves `work` running: it is neither dropped half-way nor
+/// started again. Never `Ignore` nor `Retry`.
+async fn through_control<T>(
+    rx: &mut mpsc::Receiver<Cmd>,
+    work: impl std::future::Future<Output = T>,
+) -> Step<T> {
+    // Boxed: the callers' futures stay small.
+    let mut work = Box::pin(work);
+    loop {
+        let step = tokio::select! {
+            cmd = rx.recv() => control(cmd).map(|()| unreachable!()),
+            r = &mut work => Step::Got(r),
+        };
+        if !matches!(step, Step::Ignore) {
+            return step;
+        }
+    }
+}
+
 /// Run one session over `input`/`output`; the process exit code.
 pub async fn run<R, W>(args: Args, env: Env, input: R, output: &mut W) -> i32
 where
@@ -534,18 +554,22 @@ async fn session<W: AsyncWrite + Unpin>(
         Err(e) => return Ok(out.refused(88, format!("HTTP client: {e}"), None).await),
     };
     let now = (env.clock)();
-    let verdict = loop {
-        let step = tokio::select! {
-            cmd = rx.recv() => control(cmd).map(|_| unreachable!()),
-            r = verify_pinned(&doc, &config, tls_spki, &args.machine_type, entry, env, &http, now) => Step::Got(r),
-        };
-        match step {
-            Step::Got(r) => break r,
-            Step::Ignore => {}
-            Step::Stop => return Ok(out.stopped().await),
-            Step::Eof => return Err(EXIT_PROTOCOL),
-            Step::Retry(_) => unreachable!(),
-        }
+    // An ignored command does not start the verification over.
+    let verifying = verify_pinned(
+        &doc,
+        &config,
+        tls_spki,
+        &args.machine_type,
+        entry,
+        env,
+        &http,
+        now,
+    );
+    let verdict = match through_control(&mut rx, verifying).await {
+        Step::Got(r) => r,
+        Step::Stop => return Ok(out.stopped().await),
+        Step::Eof => return Err(EXIT_PROTOCOL),
+        Step::Ignore | Step::Retry(_) => unreachable!("through_control ends on neither"),
     };
     // The session quote of the connection the document came on: the TLS
     // session itself is the TD's, not a relay's holding its key.
@@ -600,16 +624,14 @@ async fn session<W: AsyncWrite + Unpin>(
         },
     )
     .await?;
-    let step = tokio::select! {
-        cmd = rx.recv() => control(cmd).map(|_| unreachable!()),
-        r = send_key(&client, env) => Step::Got(r),
-    };
-    match step {
-        Step::Got(Ok(())) | Step::Ignore => {}
+    // An ignored command is not the key's acceptance: the key is sent to its
+    // own answer, once.
+    match through_control(&mut rx, send_key(&client, env)).await {
+        Step::Got(Ok(())) => {}
         Step::Got(Err(r)) => return Ok(out.refused(r.code, r.reason, None).await),
-        Step::Retry(_) => unreachable!("send_key retries nothing"),
         Step::Stop => return Ok(out.stopped().await),
         Step::Eof => return Err(EXIT_PROTOCOL),
+        Step::Ignore | Step::Retry(_) => unreachable!("through_control ends on neither"),
     }
     out.progress(
         "loading",
@@ -831,6 +853,45 @@ pub fn save_evidence(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A control line that is ignored (a bad line, a second connect) while a
+    /// step is running neither ends that step nor passes for its success: the
+    /// step runs once, to its own result.
+    #[tokio::test]
+    async fn an_ignored_command_neither_ends_nor_restarts_a_running_step() {
+        let (tx, mut rx) = mpsc::channel::<Cmd>(8);
+        tx.send(Cmd::Bad("not JSON".into())).await.unwrap();
+        tx.send(Cmd::Connect {
+            endpoint: "h:1".into(),
+            boot_deadline_unix: 0,
+        })
+        .await
+        .unwrap();
+        let started = std::sync::atomic::AtomicUsize::new(0);
+        let (go, wait) = tokio::sync::oneshot::channel::<()>();
+        let work = async {
+            started.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            wait.await.unwrap();
+            7
+        };
+        let release = async {
+            // Both commands are read before the step may end.
+            while tx.capacity() < 8 {
+                tokio::task::yield_now().await;
+            }
+            go.send(()).unwrap();
+        };
+        let (step, ()) = tokio::join!(through_control(&mut rx, work), release);
+        assert!(
+            matches!(step, Step::Got(7)),
+            "the step did not run to its result"
+        );
+        assert_eq!(started.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // A stop still ends it.
+        tx.send(Cmd::Stop).await.unwrap();
+        let never = std::future::pending::<()>();
+        assert!(matches!(through_control(&mut rx, never).await, Step::Stop));
+    }
 
     /// A refusal reason carries text the TD chose (an attested key, an error
     /// body): written to a terminal raw, an escape sequence in it would run.

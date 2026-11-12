@@ -484,9 +484,10 @@ above left open, each the stricter of two and each reversible:
   gateway as it opens; both run the same check (`check_chat_body`).
 - **One refusal.** A request that does not open, is not a chat request, was
   answered already, falls outside the 120 s window either way, does not come
-  as `message/ohttp-req` or is larger than the largest the SDK seals
+  as `message/ohttp-req`, is larger than the largest the SDK seals
   (`e2e::MAX_SEALED_REQUEST`: the 4 MiB bucket and 55 bytes of OHTTP, the
-  route's body limit) gets 400 `{"error":"sealed request refused"}`, one
+  route's body limit) or is not whole 30 s after its head took its queue
+  place (since 2026-11-10; the place was held until the carrier left) gets 400 `{"error":"sealed request refused"}`, one
   second after it arrived, as a whole answer refused before its turn. The
   class is counted, not said; `e2e_gateway.rs` has no log macro
   (`tests/no_log_on_answer_paths.rs`).

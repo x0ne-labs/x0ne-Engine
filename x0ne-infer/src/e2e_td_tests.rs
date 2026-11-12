@@ -232,6 +232,9 @@ struct Lab {
     nras: String,
     /// Answers that NRAS gave.
     nras_answers: Arc<AtomicUsize>,
+    /// The tick the lab's TDs pad at: production's, unless the test took
+    /// [`Lab::short_tick`].
+    tick: crate::padding::Tick,
 }
 
 impl Lab {
@@ -247,7 +250,16 @@ impl Lab {
             bucket: bucket_with_endorsed().await,
             nras,
             nras_answers,
+            tick: crate::padding::Tick::PRODUCTION,
         }
+    }
+
+    /// The same lab, its TDs padding at [`crate::padding::Tick::SHORT`]: for
+    /// a test that asserts no time, no number of chunks and no size of ticks.
+    #[must_use]
+    fn short_tick(mut self) -> Self {
+        self.tick = crate::padding::Tick::SHORT;
+        self
     }
 
     fn td_anchors(&self) -> TdAnchors {
@@ -383,6 +395,7 @@ async fn start_td(lab: &Lab, spec: Spec) -> Td {
         gpu_ready: Box::new(|| Some(cloud_serve::NVML_CC_ACCEPTING_CLIENT_REQUESTS_TRUE)),
         serving: crate::server::Serving {
             admission: crate::server::Admission::new(8),
+            tick: lab.tick,
             ..crate::server::Serving::default()
         },
         salt_source: Arc::new(test_random),
@@ -1026,7 +1039,7 @@ fn assert_carried_blind(seen: &Streams, needles: &[&[u8]]) {
 /// recorder sees both in the plain route's traffic.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_sealed_question_crosses_the_carrier_and_its_answer_and_receipt_check() {
-    let lab = Lab::new().await;
+    let lab = Lab::new().await.short_tick();
     let runs = Arc::new(AtomicUsize::new(0));
     let td = ready_td(&lab, &runs).await;
     let carrier = Carrier::start(&lab, &td).await;
@@ -1505,11 +1518,172 @@ async fn opened_requests_that_are_no_chat_get_the_one_refusal_at_the_floor() {
     assert_eq!(runs.load(SeqCst), ran + 1);
 }
 
+/// The paths `cloud_serve::router` serves, read from its source: a route
+/// added there is asked through the sealed path by the test below without
+/// that test being touched.
+fn td_routes() -> Vec<String> {
+    let src = include_str!("cloud_serve.rs");
+    let router = &src[src.find("pub fn router(").expect("cloud_serve::router")..];
+    let router = &router[..router.find("\n}\n").expect("the router's end")];
+    router
+        .split(".route(")
+        .skip(1)
+        .map(|after| {
+            let path = after.split('"').nth(1).expect("a route's path");
+            assert!(path.starts_with('/'), "not a path: {path:?}");
+            path.to_string()
+        })
+        .collect()
+}
+
+/// SECURITY: the sealed path reaches one route, `POST /v1/chat/completions`,
+/// and no other. A caller that holds the TD's OHTTP key seals a request for
+/// every route the TD's router serves (the key release, the attestation, the
+/// sealed path itself), under `GET` and `POST`, and for spellings of the chat
+/// route a router might normalise; whole and chunked, each gets the answer
+/// of a request that does not open, the model does not run, and no key
+/// route is called. The same request for the chat route is answered.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_sealed_path_reaches_the_chat_route_and_no_other_route_of_the_td() {
+    use x0ne_sdk::bhttp;
+    use x0ne_sdk::e2e::{http_date, padded_len, CHAT_PATH, MIN_PADDED, SENT_AT_HEADER};
+    let lab = Lab::new().await.short_tick();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let td = ready_td(&lab, &runs).await;
+    let ran = runs.load(SeqCst);
+    let config = ohttp::KeyConfig::parse(&td.state.e2e.key_config()).unwrap();
+
+    let routes = td_routes();
+    for known in [
+        CHAT_PATH,
+        "/v2/key",
+        "/v2/model-key",
+        "/v2/attestation",
+        "/v2/e2e/chat",
+    ] {
+        assert!(routes.iter().any(|r| r == known), "{known}: {routes:?}");
+    }
+    let mut targets: Vec<(String, String)> = Vec::new();
+    for route in &routes {
+        for method in ["GET", "POST"] {
+            if (method, route.as_str()) != ("POST", CHAT_PATH) {
+                targets.push((method.into(), route.clone()));
+            }
+        }
+    }
+    for method in ["post", "PUT", "OPTIONS", "CONNECT", ""] {
+        targets.push((method.into(), CHAT_PATH.into()));
+    }
+    for path in [
+        "/v1/chat/completions/",
+        "/v1/chat/completions?stream=false",
+        "/v1/chat/completions#",
+        "/V1/CHAT/COMPLETIONS",
+        "//v1/chat/completions",
+        "/v1/%63hat/completions",
+        "/v1/chat/completions/../../v2/key",
+        "/v2/../v1/chat/completions",
+        "https://td/v1/chat/completions",
+        "v1/chat/completions",
+        "*",
+        "",
+    ] {
+        targets.push(("POST".into(), path.into()));
+    }
+
+    // The inner request of the SDK (`e2e::chat_request`), its method and path given.
+    let inner = |method: &str, path: &str, content: &[u8]| {
+        let req = bhttp::Request {
+            method: method.into(),
+            scheme: "https".into(),
+            authority: String::new(),
+            path: path.into(),
+            headers: vec![
+                ("content-type".into(), "application/json".into()),
+                (SENT_AT_HEADER.into(), http_date(now())),
+            ],
+            content: content.to_vec(),
+        };
+        req.encode(padded_len(req.encode(0).len()).unwrap())
+    };
+    let whole = |method: &str, path: &str| {
+        let plain = inner(method, path, &question(QUESTION));
+        ohttp::encapsulate_request(&config, &plain, &test_random())
+            .unwrap()
+            .0
+    };
+    let chunked = |method: &str, path: &str| {
+        let plain = inner(method, path, &stream_question(QUESTION));
+        let chunks: Vec<&[u8]> = plain.chunks(ohttp::MAX_CHUNK_DATA).collect();
+        ohttp::encapsulate_chunked_request(&config, &chunks, &test_random())
+            .unwrap()
+            .0
+    };
+    let ask = |ctype: &'static str, sealed: Vec<u8>| {
+        call(&td, "POST", "/v2/e2e/chat", Some(ctype), sealed)
+    };
+
+    // What a request that does not open is answered: the one refusal.
+    let unopened = ask(ohttp::MEDIA_TYPE_REQUEST, vec![0x40; MIN_PADDED]).await;
+    assert_eq!(unopened.status, 400);
+    assert_eq!(
+        unopened.body,
+        serde_json::to_vec(&json!({ "error": REFUSED })).unwrap()
+    );
+    let stats = &td.state.stats;
+    let (keys, clear_chats) = (stats.key_posts.load(SeqCst), stats.chat_posts.load(SeqCst));
+
+    for (method, path) in &targets {
+        for (kind, ctype, sealed) in [
+            ("whole", ohttp::MEDIA_TYPE_REQUEST, whole(method, path)),
+            (
+                "chunked",
+                ohttp::MEDIA_TYPE_CHUNKED_REQUEST,
+                chunked(method, path),
+            ),
+        ] {
+            let r = ask(ctype, sealed).await;
+            let what = format!("{kind} {method:?} {path:?}");
+            assert_eq!(r.status, unopened.status, "{what}");
+            assert_eq!(r.body, unopened.body, "{what}");
+            assert_eq!(r.content_type(), unopened.content_type(), "{what}");
+        }
+    }
+    let counts = &td.state.e2e.counts;
+    assert_eq!(
+        counts.refused_open.load(SeqCst),
+        1 + 2 * targets.len() as u64
+    );
+    assert_eq!(counts.opened.load(SeqCst), 0);
+    assert_eq!(counts.streams.load(SeqCst), 0);
+    assert_eq!(runs.load(SeqCst), ran, "the model did not run");
+    assert_eq!(stats.key_posts.load(SeqCst), keys, "a key route was called");
+    assert_eq!(
+        stats.chat_posts.load(SeqCst),
+        clear_chats,
+        "the clear chat route was called"
+    );
+
+    // Control: the same two requests for the chat route are answered.
+    let r = ask(ohttp::MEDIA_TYPE_REQUEST, whole("POST", CHAT_PATH)).await;
+    assert_eq!(r.status, 200);
+    assert_eq!(r.content_type(), ohttp::MEDIA_TYPE_RESPONSE);
+    let r = ask(
+        ohttp::MEDIA_TYPE_CHUNKED_REQUEST,
+        chunked("POST", CHAT_PATH),
+    )
+    .await;
+    assert_eq!(r.status, 200);
+    assert_eq!(r.content_type(), ohttp::MEDIA_TYPE_CHUNKED_RESPONSE);
+    assert_eq!(counts.opened.load(SeqCst), 2);
+    assert_eq!(runs.load(SeqCst), ran + 2, "the two chat requests ran");
+}
+
 /// SECURITY (c): an answer with one bit flipped, or another request's
 /// answer, does not open: the caller is told nothing it did not get sealed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_caller_refuses_an_altered_or_swapped_answer() {
-    let lab = Lab::new().await;
+    let lab = Lab::new().await.short_tick();
     let runs = Arc::new(AtomicUsize::new(0));
     let td = ready_td(&lab, &runs).await;
     let carrier = Carrier::start(&lab, &td).await;
@@ -1791,13 +1965,97 @@ async fn the_chat_route_reads_the_largest_sealed_request_and_no_byte_more() {
     assert_eq!(counts.refused_open.load(SeqCst), 0, "not read, not opened");
 }
 
+/// A request body that never sends a byte and never ends.
+struct BodyThatNeverComes;
+
+impl hyper::body::Body for BodyThatNeverComes {
+    type Data = Bytes;
+    type Error = std::convert::Infallible;
+    fn poll_frame(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<hyper::body::Frame<Bytes>, Self::Error>>> {
+        std::task::Poll::Pending
+    }
+}
+
+/// The TD's two queued routes give a queue place 30 s to send its body
+/// (`server::admit`): a carrier that sends a head and no body holds the
+/// place that long, not for as long as it stays connected. A sealed request
+/// is then refused as any other, 400 and [`REFUSED`], unopened; a chat in
+/// clear is told 408 in the error shape. Until 2026-11-10 neither was
+/// answered and the place stayed taken.
+///
+/// The routes are called without the TLS channel, the clock paused once the
+/// TD is ready: the wait costs no time.
+#[tokio::test]
+async fn a_request_whose_body_does_not_come_gives_the_tds_queue_place_back() {
+    use hyper::service::Service as _;
+    let lab = Lab::new().await;
+    let runs = Arc::new(AtomicUsize::new(0));
+    let td = ready_td(&lab, &runs).await;
+    let admission = &td.state.serving.admission;
+    assert_eq!(admission.in_flight(), 0);
+    tokio::time::pause();
+    let (almost, wait) = (Duration::from_secs(29), Duration::from_secs(30));
+    let ran = runs.load(SeqCst);
+    for (path, ctype) in [
+        ("/v2/e2e/chat", ohttp::MEDIA_TYPE_REQUEST),
+        ("/v2/e2e/chat", ohttp::MEDIA_TYPE_CHUNKED_REQUEST),
+        ("/v1/chat/completions", "application/json"),
+    ] {
+        let svc =
+            hyper_util::service::TowerToHyperService::new(cloud_serve::router(td.state.clone()));
+        let req = axum::http::Request::builder()
+            .method("POST")
+            .uri(path)
+            .header(header::CONTENT_TYPE, ctype)
+            .body(axum::body::Body::new(BodyThatNeverComes))
+            .unwrap();
+        let asked = tokio::time::Instant::now();
+        let answered = tokio::spawn(svc.call(req));
+        tokio::time::sleep(almost).await;
+        assert_eq!(admission.in_flight(), 1, "{path} {ctype}: held");
+        let resp = tokio::time::timeout(wait, answered)
+            .await
+            .unwrap_or_else(|_| panic!("{path} {ctype}: no answer {wait:?} past the wait"))
+            .unwrap()
+            .unwrap();
+        let took = asked.elapsed();
+        assert!(
+            took >= wait + floor() && took < wait + floor() + CADENCE_SLACK,
+            "{path} {ctype}: {took:?}"
+        );
+        let status = resp.status();
+        let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        if path == "/v2/e2e/chat" {
+            assert_eq!(status, 400, "{ctype}");
+            assert_eq!(
+                body,
+                serde_json::to_vec(&json!({ "error": REFUSED })).unwrap()
+            );
+        } else {
+            assert_eq!(status, 408);
+            let said: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(said["error"]["type"], crate::openai::error::TYPE, "{said}");
+        }
+        assert_eq!(admission.in_flight(), 0, "{path} {ctype}: given back");
+    }
+    let counts = &td.state.e2e.counts;
+    assert_eq!(counts.refused_open.load(SeqCst), 0, "not read, not opened");
+    assert_eq!(counts.opened.load(SeqCst), 0);
+    assert_eq!(runs.load(SeqCst), ran, "the model did not run");
+}
+
 /// SECURITY: a question whose JSON holds a lone
 /// surrogate (`\ud800`) is refused by the caller before anything leaves,
 /// and, sealed by other code, by the gateway as it opens: the TD opens no
 /// request it then cannot read, and the model does not run.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_lone_surrogate_is_refused_before_sending_and_at_opening() {
-    let lab = Lab::new().await;
+    let lab = Lab::new().await.short_tick();
     let runs = Arc::new(AtomicUsize::new(0));
     let td = ready_td(&lab, &runs).await;
     let carrier = Carrier::start(&lab, &td).await;
@@ -1858,7 +2116,7 @@ async fn ready_gpu_td(lab: &Lab, td: FakeTd, runs: &Arc<AtomicUsize>) -> Td {
 /// evidence.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_gpu_session_seals_through_the_carrier_with_its_gpu_attested() {
-    let lab = Lab::new().await;
+    let lab = Lab::new().await.short_tick();
     let runs = Arc::new(AtomicUsize::new(0));
     let td = ready_gpu_td(&lab, lab.honest(), &runs).await;
     let carrier = Carrier::start(&lab, &td).await;
@@ -2054,7 +2312,7 @@ async fn a_key_documents_nvml_collection_does_not_hold_the_session_quote() {
 /// the route still answers afterwards.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn no_bytes_a_carrier_sends_panic_the_gateway_or_reach_the_model() {
-    let lab = Lab::new().await;
+    let lab = Lab::new().await.short_tick();
     let runs = Arc::new(AtomicUsize::new(0));
     let td = ready_td(&lab, &runs).await;
     let carrier = Carrier::start(&lab, &td).await;
@@ -3639,4 +3897,184 @@ async fn the_c_abi_streams_through_the_carrier_and_refuses_a_bent_frame() {
     let closed = run(OP_CLOSE, json!({ "handle": key }));
     assert_eq!(closed["ok"], true, "{closed}");
     assert_carried_blind(&carrier.seen, &[QUESTION_NEEDLE, ANSWER_NEEDLE]);
+}
+
+// ── A caller who hangs up on the sealed path ─────────────────────────────────
+
+/// A model that reads its prompt for 20 ms once started, then takes 10 ms a
+/// step and asks at each one whether anyone still waits, as the candle and
+/// Core loops do. `steps`: the steps run, all requests together.
+struct Plodder {
+    steps: Arc<AtomicUsize>,
+}
+
+impl LoadedModel for Plodder {
+    fn generate(
+        &self,
+        prompt: &crate::prompt::Prompt,
+        max_tokens: usize,
+    ) -> anyhow::Result<(String, (u32, u32))> {
+        let c = self.generate_with(prompt, &GenerationParams::greedy(max_tokens))?;
+        Ok((c.text, (c.prompt_tokens, c.completion_tokens)))
+    }
+    fn generate_with(
+        &self,
+        prompt: &crate::prompt::Prompt,
+        params: &GenerationParams,
+    ) -> anyhow::Result<crate::backend::Completion> {
+        self.generate_streaming(prompt, params, &mut crate::backend::NoSink)
+    }
+    fn generate_whole(
+        &self,
+        prompt: &crate::prompt::Prompt,
+        params: &GenerationParams,
+        sink: &mut dyn crate::backend::TokenSink,
+    ) -> anyhow::Result<crate::backend::Completion> {
+        self.generate_streaming(prompt, params, sink)
+    }
+    fn generate_streaming(
+        &self,
+        _prompt: &crate::prompt::Prompt,
+        params: &GenerationParams,
+        sink: &mut dyn crate::backend::TokenSink,
+    ) -> anyhow::Result<crate::backend::Completion> {
+        if sink.started().is_break() {
+            return Err(crate::backend::Cancelled.into());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+        for _ in 0..params.max_tokens {
+            if !sink.alive() {
+                return Err(crate::backend::Cancelled.into());
+            }
+            std::thread::sleep(Duration::from_millis(10));
+            self.steps.fetch_add(1, SeqCst);
+        }
+        if sink.delta("t").is_break() {
+            return Err(crate::backend::Cancelled.into());
+        }
+        Ok(crate::backend::Completion {
+            text: "t".into(),
+            prompt_tokens: 1,
+            completion_tokens: params.max_tokens as u32,
+            stopped: false,
+            length: true,
+        })
+    }
+    fn model_digest_hex(&self) -> String {
+        catalog_digest()
+    }
+    fn compute_device(&self) -> String {
+        "cpu".into()
+    }
+    fn isolation(&self) -> crate::backend::Isolation {
+        crate::backend::Isolation::NONE_OF_IT
+    }
+}
+
+/// The steps run once the model has stopped: no step in 200 ms.
+async fn steps_once_still(steps: &AtomicUsize) -> usize {
+    for _ in 0..100 {
+        let before = steps.load(SeqCst);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        if steps.load(SeqCst) == before {
+            return before;
+        }
+    }
+    panic!("still generating after 20 s");
+}
+
+/// A sealed question, whole then streamed, whose carrier closes the
+/// connection once the model is three steps in: the generation stops there,
+/// as on the attested route (`service_prop_tests`, item 5), and the TD's
+/// queue place comes back. A failure is a TD that computes a sealed answer
+/// to its last token for a caller who left.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_caller_who_hangs_up_on_a_sealed_answer_stops_its_generation() {
+    const STEPS: usize = 300;
+    let lab = Lab::new().await;
+    let steps = Arc::new(AtomicUsize::new(0));
+    let model: Maker = {
+        let steps = steps.clone();
+        Arc::new(move |_| {
+            Ok(Box::new(Plodder {
+                steps: steps.clone(),
+            }) as Box<dyn LoadedModel>)
+        })
+    };
+    let td = start_td(
+        &lab,
+        Spec {
+            td: lab.honest(),
+            gpu: false,
+            model,
+            max_completion_tokens: STEPS,
+            quote_limits: cloud_serve::QuoteLimits::for_queue(8),
+        },
+    )
+    .await;
+    release_and_wait(&td).await;
+    let carrier = Carrier::start(&lab, &td).await;
+    let client = Caller::of(&carrier)
+        .verified(&lab.policy(&lab.honest()))
+        .await
+        .expect("the honest TD's key verifies");
+    let ask = |stream: bool| {
+        serde_json::to_vec(&json!({
+            "stream": stream,
+            "messages": [{ "role": "user", "content": "hi" }],
+            "max_tokens": STEPS,
+        }))
+        .unwrap()
+    };
+    let whole = client
+        .seal_chat(&ask(false), &test_random(), now())
+        .unwrap()
+        .0;
+    let streamed = client
+        .seal_chat_stream(&ask(true), &test_random(), now())
+        .unwrap()
+        .0;
+    for (what, ctype, sealed) in [
+        ("whole", ohttp::MEDIA_TYPE_REQUEST, whole),
+        ("streamed", ohttp::MEDIA_TYPE_CHUNKED_REQUEST, streamed),
+    ] {
+        let before = steps.load(SeqCst);
+        let mut send = mtls(&td.endpoint, &td.carrier_tls).await;
+        let req = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v2/e2e/chat")
+            .header(header::HOST, "td")
+            .header(header::CONTENT_TYPE, ctype)
+            .body(axum::body::Body::from(sealed))
+            .unwrap();
+        send.ready().await.unwrap();
+        // The connection lives as long as this task: aborted, it is closed.
+        let asked = tokio::spawn(async move {
+            let answer = send.send_request(req).await;
+            std::future::pending::<()>().await;
+            drop((answer, send));
+        });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while steps.load(SeqCst) < before + 3 {
+            assert!(
+                Instant::now() < deadline,
+                "{what}: the generation never began"
+            );
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        asked.abort();
+        let ran = steps_once_still(&steps).await - before;
+        assert!(
+            ran < STEPS / 2,
+            "{what}: {ran} of {STEPS} steps ran for a caller who had left"
+        );
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while td.state.serving.admission.in_flight() != 0 {
+            assert!(
+                Instant::now() < deadline,
+                "{what}: its place did not come back"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
 }

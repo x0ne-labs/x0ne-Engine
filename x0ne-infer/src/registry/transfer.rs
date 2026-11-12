@@ -1,5 +1,6 @@
 //! `pull` transfers: files at once, a large file in byte ranges at once, one connection
-//! budget; each file is still hashed whole at the end. Written ranges are listed
+//! budget; each file is still hashed whole at the end (cloud mode's intake hashes
+//! the weight files itself, on their mappings: `fetch_all`). Written ranges are listed
 //! in `partial/<sha256>.ranges`. Precedents: aria2 `--split`, hf_xet (16 ranges per file).
 
 use std::path::{Path, PathBuf};
@@ -91,17 +92,29 @@ fn declared_mismatch(name: &str, path: &str, size: u64, total: u64) -> PullError
     ))
 }
 
+/// The whole file is not the one the catalog pins; its bytes are deleted by the caller.
+pub(super) fn mismatch(name: &str, spec: &FileSpec, got: &str) -> PullError {
+    PullError::Integrity(format!(
+        "{name} {}: sha256 {got} does not match the catalog's {}; the download was deleted. \
+         Either the source served other bytes or the catalog is wrong; nothing was installed",
+        spec.path, spec.sha256
+    ))
+}
+
 enum Event {
     At(usize, u64),
     Note(String),
 }
 
-/// Bring every file of `entry` to `partial/<sha256>.part`, verified.
-/// Returns the bytes transferred.
+/// Bring every file of `entry` to `partial/<sha256>.part`, verified. With
+/// `defer_weights` the weight files are brought whole (size, ranges) and NOT
+/// hashed: the caller hashes each on its mapping before it installs anything
+/// (`verify_staged`). Returns the bytes transferred.
 pub(super) async fn fetch_all(
     store: &Store,
     source: &Source,
     entry: &Entry,
+    defer_weights: bool,
     progress: &mut dyn Progress,
 ) -> Result<u64, PullError> {
     let t = source.transfer;
@@ -129,6 +142,7 @@ pub(super) async fn fetch_all(
                 spec: f.clone(),
                 part: store.partial(&f.sha256),
                 ranges: store.partial_ranges(&f.sha256),
+                defer_hash: defer_weights && entry.weight_files().any(|w| w.path == f.path),
                 tx: tx.clone(),
                 shown: AtomicU64::new(u64::MAX),
             };
@@ -185,6 +199,7 @@ pub(super) async fn fetch_one(
         spec: spec.clone(),
         part: store.partial(&spec.sha256),
         ranges: store.partial_ranges(&spec.sha256),
+        defer_hash: false,
         tx,
         shown: AtomicU64::new(u64::MAX),
     };
@@ -216,6 +231,8 @@ struct FileJob {
     spec: FileSpec,
     part: PathBuf,
     ranges: PathBuf,
+    /// Leave the hash of the whole to the caller (`fetch_all`, `defer_weights`).
+    defer_hash: bool,
     tx: mpsc::UnboundedSender<Event>,
     /// Last percent sent: one event per percent, not per body chunk.
     shown: AtomicU64,
@@ -272,6 +289,11 @@ impl FileJob {
         } else {
             0
         };
+        if self.defer_hash {
+            // Whole, unverified: a later run finds it complete and hashes it too.
+            remove_if_any(&self.ranges)?;
+            return Ok(transferred);
+        }
         let part = self.part.clone();
         let got = tokio::task::spawn_blocking(move || store::sha256_file(&part))
             .await
@@ -280,11 +302,7 @@ impl FileJob {
         if got != self.spec.sha256 {
             let _ = std::fs::remove_file(&self.part);
             let _ = std::fs::remove_file(&self.ranges);
-            return Err(PullError::Integrity(format!(
-                "{} {}: sha256 {got} does not match the catalog's {}; the download was deleted. \
-                 Either the source served other bytes or the catalog is wrong; nothing was installed",
-                self.shared.name, self.spec.path, self.spec.sha256
-            )));
+            return Err(mismatch(&self.shared.name, &self.spec, &got));
         }
         remove_if_any(&self.ranges)?;
         Ok(transferred)

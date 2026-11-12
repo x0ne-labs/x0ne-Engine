@@ -783,6 +783,15 @@ pub fn verify_response(
                 "responder certificate outside its validity window [{nb}, {na}] at {now}"
             ));
         }
+        // RFC 5280, section 4.1.1.2: the algorithm written after the signed
+        // part MUST be the one inside it. `certs` is outside what the
+        // response's signature covers, and no signature covers the outer one.
+        if !crate::pcs::signature_algorithm_repeated(c.as_raw()) {
+            return Err(
+                "responder certificate: the signed and the outer signature algorithms differ"
+                    .into(),
+            );
+        }
         verify_signature(
             issuer,
             &c.signature_algorithm.algorithm,
@@ -1023,7 +1032,7 @@ pub(crate) mod tests {
     fn ctx_prim(n: u8, content: &[u8]) -> Vec<u8> {
         tlv(0x80 | n, content)
     }
-    fn der_oid(arcs: &[u64]) -> Vec<u8> {
+    pub(crate) fn der_oid(arcs: &[u64]) -> Vec<u8> {
         let mut body = vec![(arcs[0] * 40 + arcs[1]) as u8];
         for &a in &arcs[2..] {
             let mut tmp = Vec::new();
@@ -1052,7 +1061,7 @@ pub(crate) mod tests {
     fn octets(b: &[u8]) -> Vec<u8> {
         tlv(0x04, b)
     }
-    fn bitstring(b: &[u8]) -> Vec<u8> {
+    pub(crate) fn bitstring(b: &[u8]) -> Vec<u8> {
         let mut c = vec![0u8];
         c.extend_from_slice(b);
         tlv(0x03, &c)
@@ -1060,7 +1069,7 @@ pub(crate) mod tests {
     fn enumerated(n: u8) -> Vec<u8> {
         tlv(0x0a, &[n])
     }
-    fn null() -> Vec<u8> {
+    pub(crate) fn null() -> Vec<u8> {
         tlv(0x05, &[])
     }
     fn boolean(b: bool) -> Vec<u8> {
@@ -1135,13 +1144,13 @@ pub(crate) mod tests {
                 SignerKind::Rsa => der_oid(&[1, 2, 840, 113549, 1, 1, 11]),
             }
         }
-        fn algorithm_identifier(&self) -> Vec<u8> {
+        pub(crate) fn algorithm_identifier(&self) -> Vec<u8> {
             match self.kind {
                 SignerKind::Rsa => seq(&[&self.algorithm_oid(), &null()]),
                 _ => seq(&[&self.algorithm_oid()]),
             }
         }
-        fn sign(&self, msg: &[u8]) -> Vec<u8> {
+        pub(crate) fn sign(&self, msg: &[u8]) -> Vec<u8> {
             let kp = KeyPair::from_pkcs8_pem_and_sign_algo(&self.pem, self.algorithm())
                 .expect("the key pair it was made from");
             rcgen::SigningKey::sign(&kp, msg).expect("signs")
@@ -1219,6 +1228,34 @@ pub(crate) mod tests {
 
     fn cert(der: &[u8]) -> X509Certificate<'_> {
         X509Certificate::from_der(der).unwrap().1
+    }
+
+    /// `cert_der` with the `signatureAlgorithm` after its signed part
+    /// replaced by `algorithm`, the DER of an `AlgorithmIdentifier`: bytes
+    /// no signature covers.
+    pub(crate) fn with_outer_algorithm(cert_der: &[u8], algorithm: &[u8]) -> Vec<u8> {
+        let c = cert(cert_der);
+        seq(&[
+            c.tbs_certificate.as_ref(),
+            algorithm,
+            &bitstring(&c.signature_value.data),
+        ])
+    }
+
+    /// `cert_der` signed again by `issuer` after `edit` changed its signed
+    /// part; the outer `signatureAlgorithm` is the one `issuer` signs with.
+    pub(crate) fn signed_again(
+        cert_der: &[u8],
+        issuer: &Signer,
+        edit: impl FnOnce(&mut Vec<u8>),
+    ) -> Vec<u8> {
+        let mut tbs = cert(cert_der).tbs_certificate.as_ref().to_vec();
+        edit(&mut tbs);
+        seq(&[
+            &tbs,
+            &issuer.algorithm_identifier(),
+            &bitstring(&issuer.sign(&tbs)),
+        ])
     }
 
     // ── The synthetic responder ─────────────────────────────────────────
@@ -1705,6 +1742,65 @@ pub(crate) mod tests {
         );
         let e = j.expect_err("an expired responder");
         assert!(e.to_string().contains("validity window"), "{e}");
+    }
+
+    /// RFC 5280, section 4.1.1.2: the algorithm written after the signed part
+    /// of a certificate MUST be the one inside it. The responder certificate
+    /// travels in `certs`, which the response's signature does not cover, and
+    /// its outer algorithm is covered by no signature at all.
+    #[test]
+    fn a_responder_certificate_whose_outer_algorithm_is_not_the_signed_one_is_refused() {
+        const ECDSA_SHA384: &[u64] = &[1, 2, 840, 10045, 4, 3, 3];
+        let b = bench();
+        let kp = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+        let marked = end_entity(
+            &b.inter,
+            &kp,
+            &[7],
+            &[ExtendedKeyUsagePurpose::OcspSigning],
+            (1970, 4096),
+        );
+        let judged = |responder: Vec<u8>| {
+            let r = Response {
+                delegated: Some((responder, Signer::of(&kp))),
+                ..Response::good_at(NOW)
+            };
+            judge(
+                &b,
+                &[respond(&r, &b.leaf_der, &b.inter)],
+                &NrasOcspPolicy::required(),
+            )
+        };
+        let j = judged(marked.clone());
+        assert!(
+            matches!(leaf_standing(&j), OcspStatus::Good { .. }),
+            "{j:?}"
+        );
+
+        // The same algorithm outside, written with a NULL the signed one has not.
+        let with_null = with_outer_algorithm(&marked, &seq(&[&der_oid(ECDSA_SHA384), &null()]));
+        assert_ne!(with_null, marked);
+        // A signed part that names ecdsa-with-SHA256, signed with SHA-384 by
+        // the issuer and saying so outside only.
+        let signed = seq(&[&der_oid(ECDSA_SHA384)]);
+        let renamed = signed_again(&marked, &b.inter.signer, |tbs| {
+            let at = tbs
+                .windows(signed.len())
+                .position(|w| w == signed)
+                .expect("the signed algorithm");
+            tbs[at + signed.len() - 1] = 0x02;
+        });
+        let mut not_refused = Vec::new();
+        for (what, responder) in [
+            ("an outer algorithm with other parameters", with_null),
+            ("a signed algorithm that is not the one verified", renamed),
+        ] {
+            match judged(responder) {
+                Err(e) if e.to_string().contains("algorithms differ") => {}
+                other => not_refused.push(format!("{what}: {other:?}")),
+            }
+        }
+        assert!(not_refused.is_empty(), "{not_refused:#?}");
     }
 
     /// SECURITY: a revoked signing leaf is a leaked or retired key; nothing

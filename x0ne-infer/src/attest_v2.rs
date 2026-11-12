@@ -361,10 +361,12 @@ impl TdEvidence for SystemEvidence {
                     .map(|e| crate::nras::gpu_leaf_serial_decimal(&e.certificate))
                     .collect::<Result<Vec<_>, _>>()
                     .map_err(|e| fail(83, format!("local GPU certificate unreadable: {e}")))?;
-                let attested =
-                    crate::nras_http::attest_gpu(&self.nras_url, &request, self.nras_key.as_ref())
-                        .await;
-                let jwks = crate::nras_http::fetch_jwks(&self.nras_jwks_url).await;
+                // Together: neither waits for the other's answer, and both
+                // were always awaited; the attest call's failure comes first.
+                let (attested, jwks) = tokio::join!(
+                    crate::nras_http::attest_gpu(&self.nras_url, &request, self.nras_key.as_ref()),
+                    crate::nras_http::fetch_jwks(&self.nras_jwks_url),
+                );
                 match (attested, jwks) {
                     (Ok((overall_token, per_gpu)), Ok(jwks)) => Ok(GpuAttested {
                         overall_token,
@@ -423,10 +425,12 @@ impl TdEvidence for SystemEvidence {
                 &self.gpu_arch,
             )
             .map_err(|e| fail(78, format!("NRAS request refused before sending: {e:#}")))?;
-            let attested =
-                crate::nras_http::attest_gpu(&self.nras_url, &request, self.nras_key.as_ref())
-                    .await;
-            let jwks = crate::nras_http::fetch_jwks(&self.nras_jwks_url).await;
+            // Together: neither waits for the other's answer, and both
+            // were always awaited; the attest call's failure comes first.
+            let (attested, jwks) = tokio::join!(
+                crate::nras_http::attest_gpu(&self.nras_url, &request, self.nras_key.as_ref()),
+                crate::nras_http::fetch_jwks(&self.nras_jwks_url),
+            );
             match (attested, jwks) {
                 (Ok((overall, per_gpu)), Ok(jwks)) => Ok(NrasVerdict {
                     answer: nras_answer(&overall, &per_gpu),
@@ -1685,9 +1689,7 @@ pub(crate) mod fixtures {
             qe_report[320..352].copy_from_slice(&h.finalize());
             let qe_sig: Signature = qe_signer.sign(&qe_report);
 
-            let mut quote = vec![0u8; SIGNED_LEN];
-            quote[0] = 4;
-            quote[4] = 0x81;
+            let mut quote = crate::pcs::tests::td_quote_header_and_body();
             quote[48 + 120..48 + 128].copy_from_slice(&td_attributes);
             quote[48 + 136..48 + 184].copy_from_slice(mrtd);
             for (i, r) in rtmr.iter().enumerate() {
@@ -3439,5 +3441,129 @@ mod tests {
             }
             assert!(!e.message.contains("CANARY"), "{}", e.message);
         }
+    }
+
+    /// The attest call and the JWKS wait for nothing from each other: NRAS
+    /// sees both in flight at once, one round trip for a connection's GPU
+    /// proof, not two. When both fail, the failure is the attest call's,
+    /// also when it comes back last.
+    #[tokio::test]
+    async fn the_nras_call_and_its_jwks_are_asked_for_together() {
+        use axum::routing::{get, post};
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        use std::time::Duration;
+        struct Seen {
+            in_flight: AtomicUsize,
+            peak: AtomicUsize,
+        }
+        // An NRAS waiting `attest` then answering `status`, its JWKS
+        // waiting `jwks` then answering `jwks_status`.
+        async fn nras(
+            seen: Arc<Seen>,
+            (attest, status): (Duration, u16),
+            (jwks, jwks_status): (Duration, u16),
+        ) -> String {
+            async fn held(seen: &Seen, wait: Duration) {
+                let now = seen.in_flight.fetch_add(1, SeqCst) + 1;
+                seen.peak.fetch_max(now, SeqCst);
+                tokio::time::sleep(wait).await;
+                seen.in_flight.fetch_sub(1, SeqCst);
+            }
+            let (a, j) = (seen.clone(), seen);
+            let app = axum::Router::new()
+                .route(
+                    "/v4/attest/gpu",
+                    post(move || async move {
+                        held(&a, attest).await;
+                        (
+                            axum::http::StatusCode::from_u16(status).unwrap(),
+                            axum::Json(serde_json::json!([["JWT", "o.o.o"], {"GPU-0": "g.g.g"}])),
+                        )
+                    }),
+                )
+                .route(
+                    "/.well-known/jwks.json",
+                    get(move || async move {
+                        held(&j, jwks).await;
+                        (
+                            axum::http::StatusCode::from_u16(jwks_status).unwrap(),
+                            axum::Json(serde_json::json!({"keys": [{"kty": "EC"}]})),
+                        )
+                    }),
+                );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tokio::spawn(async move {
+                let _ = axum::serve(listener, app).await;
+            });
+            format!("http://{addr}")
+        }
+        let source = |base: &str| SystemEvidence {
+            nras_url: format!("{base}/v4/attest/gpu"),
+            nras_jwks_url: format!("{base}/.well-known/jwks.json"),
+            nras_key: None,
+            gpu_arch: "HOPPER".into(),
+        };
+        let evidence = vec![crate::nras_client::GpuEvidence {
+            evidence: "ZXY=".into(),
+            certificate: "Y2M=".into(),
+        }];
+        let ms = Duration::from_millis;
+        let seen = Arc::new(Seen {
+            in_flight: AtomicUsize::new(0),
+            peak: AtomicUsize::new(0),
+        });
+        let base = nras(seen.clone(), (ms(50), 200), (ms(50), 200)).await;
+        let started = std::time::Instant::now();
+        let verdict = source(&base).nras(&[7; 32], &evidence).await.unwrap();
+        println!(
+            "NRAS, one connection's GPU proof: POST and GET at 50 ms each took {} ms, {} in flight at most",
+            started.elapsed().as_millis(),
+            seen.peak.load(SeqCst)
+        );
+        assert_eq!(
+            verdict.answer,
+            nras_answer("o.o.o", &[("GPU-0".into(), "g.g.g".into())])
+        );
+        assert_eq!(verdict.jwks["keys"][0]["kty"], "EC");
+        // Counted on a longer wait: the two calls would have to arrive
+        // 300 ms apart to be counted apart.
+        let seen = Arc::new(Seen {
+            in_flight: AtomicUsize::new(0),
+            peak: AtomicUsize::new(0),
+        });
+        let base = nras(seen.clone(), (ms(300), 200), (ms(300), 200)).await;
+        source(&base).nras(&[7; 32], &evidence).await.unwrap();
+        assert_eq!(seen.peak.load(SeqCst), 2, "calls in flight at once");
+
+        for (attest_wait, jwks_wait) in [(0, 0), (60, 0), (0, 60)] {
+            let seen = Arc::new(Seen {
+                in_flight: AtomicUsize::new(0),
+                peak: AtomicUsize::new(0),
+            });
+            let base = nras(seen, (ms(attest_wait), 500), (ms(jwks_wait), 503)).await;
+            let Err(e) = source(&base).nras(&[7; 32], &evidence).await else {
+                panic!("served");
+            };
+            assert_eq!(e.code, 75, "{}", e.message);
+            assert!(e.message.contains("NRAS answered 500"), "{}", e.message);
+        }
+        let base = nras(
+            Arc::new(Seen {
+                in_flight: AtomicUsize::new(0),
+                peak: AtomicUsize::new(0),
+            }),
+            (ms(0), 200),
+            (ms(0), 503),
+        )
+        .await;
+        let Err(e) = source(&base).nras(&[7; 32], &evidence).await else {
+            panic!("served");
+        };
+        assert!(
+            e.message.contains("JWKS endpoint answered 503"),
+            "{}",
+            e.message
+        );
     }
 }

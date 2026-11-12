@@ -5,7 +5,10 @@
 //! 1. download the files to `partial/<sha256>.part`, several at once and a large
 //!    one in byte ranges (`transfer.rs`), resuming what a previous attempt left;
 //! 2. hash the whole file from disk and compare to the catalog; a mismatch
-//!    deletes the partial file and fails the pull;
+//!    deletes the partial file and fails the pull. Cloud mode's intake
+//!    (`pull_served`) hashes each weight file once instead, on the mapping it
+//!    serves, in `staging/` once every file is there: that one pass is this
+//!    check and the weights' part of the served digest;
 //! 3. refuse a `config.json` that asks for remote code (`auto_map`) or names
 //!    another architecture than the catalog;
 //! 4. keep shards as published: the engine maps each file (`shards.rs`);
@@ -315,6 +318,123 @@ fn local(ctx: impl std::fmt::Display) -> impl FnOnce(std::io::Error) -> PullErro
     move |e| PullError::Local(format!("{ctx}: {e}"))
 }
 
+/// A weight file as the cloud intake verified it: mapped once, hashed once on
+/// that mapping, the hash found equal to the catalog's.
+struct Mapped {
+    name: String,
+    map: memmap2::Mmap,
+    sha256: String,
+}
+
+/// Why the intake stopped: the pull failed, or a weight file cannot be mapped
+/// (`pull_served`: 96 and 71).
+enum Intake {
+    Pull(PullError),
+    Unreadable(String),
+}
+
+impl From<PullError> for Intake {
+    fn from(e: PullError) -> Self {
+        Self::Pull(e)
+    }
+}
+
+/// The catalog's weight files of `dir`, mapped, in the catalog's order.
+fn map_weights(dir: &Path, entry: &Entry) -> Result<Vec<(String, memmap2::Mmap)>, Intake> {
+    entry
+        .weight_files()
+        .map(|f| {
+            crate::fsread::map_model_file(dir, &f.path)
+                .map(|m| (f.path.clone(), m))
+                .map_err(|e| Intake::Unreadable(format!("{}: {e}", dir.join(&f.path).display())))
+        })
+        .collect()
+}
+
+/// sha256 of each mapping, each on its own thread (as `model_digest::of_contents`),
+/// against the catalog's. Err: the first file that is not the pinned one, and
+/// the sha256 found. The mappings come from [`map_weights`] on the same entry.
+fn hash_mapped(
+    maps: Vec<(String, memmap2::Mmap)>,
+    entry: &Entry,
+) -> Result<Vec<Mapped>, (FileSpec, String)> {
+    let hashes: Vec<String> = std::thread::scope(|s| {
+        let jobs: Vec<_> = maps
+            .iter()
+            .map(|(_, m)| {
+                s.spawn(move || {
+                    let got = sha256_hex(&m[..]);
+                    crate::hash_passes::note(&got);
+                    got
+                })
+            })
+            .collect();
+        jobs.into_iter()
+            .map(|j| j.join().expect("sha256 thread"))
+            .collect()
+    });
+    let mut out = Vec::with_capacity(maps.len());
+    for (((name, map), sha256), f) in maps.into_iter().zip(hashes).zip(entry.weight_files()) {
+        if sha256 != f.sha256 {
+            return Err((f.clone(), sha256));
+        }
+        out.push(Mapped { name, map, sha256 });
+    }
+    Ok(out)
+}
+
+/// [`Store::verify`] for the cloud intake: the weight files are hashed on
+/// their mappings, which are returned; the other files are read. The inner
+/// Err is a damaged copy, to replace.
+fn verify_mapped(
+    store: &Store,
+    installed: &Installed,
+    entry: &Entry,
+) -> Result<Result<Vec<Mapped>, String>, Intake> {
+    let is_weight = |f: &FileSpec| entry.weight_files().any(|w| w.path == f.path);
+    let small = store
+        .check_sizes(installed)
+        .and_then(|()| store.verify_files(installed, |f| !is_weight(f)));
+    if let Err(e) = small {
+        return Ok(Err(e));
+    }
+    let maps = map_weights(&installed.dir, entry)?;
+    Ok(hash_mapped(maps, entry).map_err(|(f, got)| {
+        format!(
+            "{}: sha256 {got}, the record says {}",
+            installed.dir.join(&f.path).display(),
+            f.sha256
+        )
+    }))
+}
+
+/// The weight files `fetch_all` left unhashed (`defer_weights`), now in
+/// `staging`: mapped, hashed on the mapping, compared to the catalog. The
+/// mappings outlive the renames that install the model (same files).
+///
+/// On a refusal nothing stays in `staging`: the refused file is deleted, the
+/// others go back to `partial/` as a failed pull leaves them, whole files the
+/// next run hashes before it installs them.
+fn verify_staged(store: &Store, entry: &Entry, staging: &Path) -> Result<Vec<Mapped>, Intake> {
+    let (refused, err) = match map_weights(staging, entry) {
+        Ok(maps) => match hash_mapped(maps, entry) {
+            Ok(weights) => return Ok(weights),
+            Err((f, got)) => {
+                let e = transfer::mismatch(&entry.name, &f, &got);
+                (Some(f.path), Intake::Pull(e))
+            }
+        },
+        Err(e) => (None, e),
+    };
+    for f in &entry.files {
+        if refused.as_deref() != Some(f.path.as_str()) {
+            let _ = std::fs::rename(staging.join(&f.path), store.partial(&f.sha256));
+        }
+    }
+    let _ = std::fs::remove_dir_all(staging);
+    Err(err)
+}
+
 /// Pull `entry` into `store`. A model already installed at the same pinned
 /// revision and digests is left untouched (`already`).
 pub async fn pull(
@@ -323,6 +443,24 @@ pub async fn pull(
     entry: &Entry,
     progress: &mut dyn Progress,
 ) -> Result<Pulled, PullError> {
+    match pull_with(store, source, entry, progress, false).await {
+        Ok((pulled, _)) => Ok(pulled),
+        Err(Intake::Pull(e)) => Err(e),
+        // Nothing is mapped without `map`.
+        Err(Intake::Unreadable(e)) => Err(PullError::Local(e)),
+    }
+}
+
+/// [`pull`]; with `map`, the weight files are verified on their mappings,
+/// once, and those mappings are returned (`pull_served`). Nothing enters
+/// `models/` before every file is verified, with `map` or without.
+async fn pull_with(
+    store: &Store,
+    source: &Source,
+    entry: &Entry,
+    progress: &mut dyn Progress,
+    map: bool,
+) -> Result<(Pulled, Vec<Mapped>), Intake> {
     let (family, tag) = entry.family_tag();
     if let Some(i) = store.installed(family, tag).map_err(PullError::Local)? {
         if i.record.is_merged() {
@@ -337,13 +475,19 @@ pub async fn pull(
             ));
         } else {
             // The record says what was installed, not what is on disk now.
-            match store.verify(&i) {
-                Ok(()) => {
-                    return Ok(Pulled {
+            let verified = if map {
+                verify_mapped(store, &i, entry)?
+            } else {
+                store.verify(&i).map(|()| Vec::new())
+            };
+            match verified {
+                Ok(weights) => {
+                    let pulled = Pulled {
                         installed: i,
                         already: true,
                         downloaded_bytes: 0,
-                    })
+                    };
+                    return Ok((pulled, weights));
                 }
                 Err(e) => progress.note(&format!("installed copy is damaged ({e}): replacing")),
             }
@@ -367,12 +511,12 @@ pub async fn pull(
         std::fs::remove_dir_all(&staging).map_err(local(staging.display()))?;
     }
     std::fs::create_dir(&staging).map_err(local(staging.display()))?;
-    let result = assemble(store, source, entry, &staging, progress).await;
+    let result = assemble(store, source, entry, &staging, map, progress).await;
     let downloaded_bytes = match result {
         Ok(v) => v,
         Err(e) => {
             let _ = std::fs::remove_dir_all(&staging);
-            return Err(e);
+            return Err(e.into());
         }
     };
 
@@ -394,14 +538,21 @@ pub async fn pull(
     write_synced(&rec_path, &json).map_err(local(rec_path.display()))?;
     store::restrict(&staging).map_err(local(staging.display()))?;
     store::sync(&staging).map_err(local(staging.display()))?;
+    // The weights' one pass, last before the rename into models/.
+    let weights = if map {
+        verify_staged(store, entry, &staging)?
+    } else {
+        Vec::new()
+    };
     let dir = store
         .install(&staging, family, tag)
         .map_err(local("install"))?;
-    Ok(Pulled {
+    let pulled = Pulled {
         installed: Installed { dir, record },
         already: false,
         downloaded_bytes,
-    })
+    };
+    Ok((pulled, weights))
 }
 
 /// What cloud mode serves: the files the served digest covers, the weights
@@ -431,6 +582,11 @@ impl Served {
 /// Cloud mode's intake: `pull` checks every file; the CATALOG's weight files are
 /// mapped, never a directory listing; index and headers agree (72); the v2 served
 /// digest is the pin (77). 96 unpinned or pull failed, 71 unreadable.
+///
+/// Each weight file is hashed once here, on the mapping returned: that sha256
+/// is compared to the catalog's before the model is installed (or, installed
+/// already, before it is served) and is the file's line of the served digest.
+/// A backend takes the digest again on the same mappings when it loads them.
 pub async fn pull_served(
     store: &Store,
     source: &Source,
@@ -440,9 +596,12 @@ pub async fn pull_served(
     if let Some(why) = entry.cloud_refusal() {
         return Err((96, why));
     }
-    let pulled = pull(store, source, entry, progress)
+    let (pulled, mapped) = pull_with(store, source, entry, progress, true)
         .await
-        .map_err(|e| (96, format!("pull {}: {e}", entry.name)))?;
+        .map_err(|e| match e {
+            Intake::Pull(e) => (96, format!("pull {}: {e}", entry.name)),
+            Intake::Unreadable(e) => (71, e),
+        })?;
     let dir = pulled.installed.dir;
     let unreadable = |f: &str, e: std::io::Error| (71, format!("{}: {e}", dir.join(f).display()));
     let read = |f: &str| crate::fsread::read_model_file(&dir, f).map_err(|e| unreadable(f, e));
@@ -453,14 +612,19 @@ pub async fn pull_served(
     } else {
         None
     };
-    let weights = entry
-        .weight_files()
-        .map(|f| {
-            crate::fsread::map_model_file(&dir, &f.path)
-                .map(|m| (f.path.clone(), m))
-                .map_err(|e| unreadable(&f.path, e))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    // The small files as read here; the weights by the hash of their mapping.
+    let mut hashes = vec![
+        ("config.json".to_string(), sha256_hex(&config_json)),
+        ("tokenizer.json".to_string(), sha256_hex(&tokenizer_json)),
+    ];
+    if let Some(index) = &index_json {
+        hashes.push((crate::shards::INDEX_FILE.to_string(), sha256_hex(index)));
+    }
+    let mut weights = Vec::with_capacity(mapped.len());
+    for m in mapped {
+        hashes.push((m.name.clone(), m.sha256));
+        weights.push((m.name, m.map));
+    }
     let mut served = Served {
         config_json,
         tokenizer_json,
@@ -472,8 +636,9 @@ pub async fn pull_served(
         let files = served.weight_files();
         crate::shards::Routing::check(files.index_json, &files.files)
             .map_err(|e| (72, format!("{}: {e:#}", entry.name)))?;
-        crate::model_spec::served_digest(&served.config_json, &served.tokenizer_json, &files)
-            .map_err(|e| (77, format!("{e:#}")))?
+        // `model_spec::served_digest` of these bytes, without a second pass.
+        crate::model_digest::from_hashes(hashes.iter().map(|(n, h)| (n.as_str(), h.as_str())))
+            .map_err(|e| (77, format!("served digest: {e}")))?
     };
     entry
         .check_served_digest(&digest_hex)
@@ -492,18 +657,21 @@ fn short(rev: &str) -> &str {
     &rev[..rev.len().min(12)]
 }
 
-/// Download and verify every file into `staging`, shards as published.
-/// Returns the bytes transferred.
+/// Download and verify every file into `staging`, shards as published; with
+/// `defer_weights`, every file but the weights. Returns the bytes transferred.
 async fn assemble(
     store: &Store,
     source: &Source,
     entry: &Entry,
     staging: &Path,
+    defer_weights: bool,
     progress: &mut dyn Progress,
 ) -> Result<u64, PullError> {
     // Every file verified in partial/ first: an interrupted pull leaves only
-    // resumable partials behind, never half a staging directory.
-    let downloaded = transfer::fetch_all(store, source, entry, progress).await?;
+    // resumable partials behind, never half a staging directory. With
+    // `defer_weights` the weight files are whole but not hashed yet: the
+    // caller hashes them in staging (`verify_staged`).
+    let downloaded = transfer::fetch_all(store, source, entry, defer_weights, progress).await?;
     for f in &entry.files {
         let dest = staging.join(&f.path);
         // Same file system (both under the root): a rename, not a copy.

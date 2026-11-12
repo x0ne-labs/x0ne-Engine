@@ -853,16 +853,42 @@ fn raw_json_value<'a>(body: &'a str, key: &str) -> Option<&'a str> {
     None
 }
 
+/// The value of one field of a date: unsigned decimal digits, one to
+/// `max_len` of them. `str::parse` alone reads a sign (`+1`, `-1`). The
+/// reader of every date field of this file and of
+/// `remote_verify::parse_http_date`.
+pub(crate) fn date_field(field: &str, max_len: usize) -> Option<i64> {
+    let digits =
+        !field.is_empty() && field.len() <= max_len && field.bytes().all(|b| b.is_ascii_digit());
+    if digits {
+        field.parse().ok()
+    } else {
+        None
+    }
+}
+
 /// `YYYY-MM-DDThh:mm:ssZ` → unix seconds. Days-from-civil (Howard Hinnant's
-/// algorithm); no dependency for one fixed format.
+/// algorithm); no dependency for one fixed format. Each field is digits
+/// alone ([`date_field`]), within its range: month 1 to 12, day 1 to 31, hour
+/// 0 to 23, minute 0 to 59, second 0 to 60 (a leap second).
 fn date_unix(s: &str) -> Option<u64> {
     let b = s.as_bytes();
-    if b.len() != 20 || b[4] != b'-' || b[7] != b'-' || b[10] != b'T' || b[19] != b'Z' {
+    // ASCII only: the fields below are cut by byte offsets.
+    if b.len() != 20
+        || !s.is_ascii()
+        || b[4] != b'-'
+        || b[7] != b'-'
+        || b[10] != b'T'
+        || b[19] != b'Z'
+    {
         return None;
     }
-    let n = |r: std::ops::Range<usize>| s[r].parse::<i64>().ok();
+    let n = |r: std::ops::Range<usize>| date_field(&s[r.clone()], r.len());
     let (y, m, d) = (n(0..4)?, n(5..7)?, n(8..10)?);
     let (hh, mm, ss) = (n(11..13)?, n(14..16)?, n(17..19)?);
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) || hh > 23 || mm > 59 || ss > 60 {
+        return None;
+    }
     let y_adj = if m <= 2 { y - 1 } else { y };
     let era = y_adj.div_euclid(400);
     let yoe = y_adj - era * 400;
@@ -1357,6 +1383,13 @@ pub fn verify_pck_crl(
             leaf.issuer()
         )));
     }
+    // RFC 5280, section 5.1.1.2: the algorithm written after the signed part
+    // MUST be the one inside it. The outer one is covered by no signature.
+    if !crate::pcs::signature_algorithm_repeated(crl.as_raw()) {
+        return Err(err(
+            "the signed and the outer signature algorithms differ".into()
+        ));
+    }
     let sig = Signature::from_der(crl.signature_value.data.as_ref())
         .map_err(|e| err(format!("signature not DER ECDSA: {e}")))?;
     p256_key_from_cert(&ca)
@@ -1471,6 +1504,13 @@ pub fn verify_root_crl(
             crl.issuer(),
             root.subject()
         )));
+    }
+    // RFC 5280, section 5.1.1.2: the algorithm written after the signed part
+    // MUST be the one inside it. The outer one is covered by no signature.
+    if !crate::pcs::signature_algorithm_repeated(crl.as_raw()) {
+        return Err(err(
+            "the signed and the outer signature algorithms differ".into()
+        ));
     }
     let sig = Signature::from_der(crl.signature_value.data.as_ref())
         .map_err(|e| err(format!("signature not DER ECDSA: {e}")))?;
@@ -1911,6 +1951,112 @@ mod tests {
         crl.push(0);
         let e = verify_pck_crl(&q, &crl, &intel.anchor(), NOW, &PROD).unwrap_err();
         assert!(e.to_string().contains("after the CRL"), "{e}");
+    }
+
+    /// A date whose 20 bytes hold a multi-byte character where digits belong
+    /// is refused: slicing it by byte offsets panicked.
+    #[test]
+    fn a_date_with_a_multi_byte_character_is_refused_not_a_panic() {
+        for s in [
+            "2026-10-22T1\u{e9}00:00Z",
+            "202\u{e9}-0-22T10:00:00Z",
+            "2026-10-22T10:0\u{e9}:0Z",
+        ] {
+            assert_eq!(s.len(), 20, "{s}");
+            assert_eq!(date_unix(s), None, "{s}");
+        }
+        assert_eq!(date_unix("1970-01-02T00:00:00Z"), Some(86_400));
+    }
+
+    /// `date_unix` on each date: all refused.
+    fn refused(dates: &[&str]) {
+        for s in dates {
+            assert_eq!(s.len(), 20, "{s}");
+            assert_eq!(date_unix(s), None, "{s}");
+        }
+        // The same shape with every field in range reads.
+        assert_eq!(date_unix("2026-10-22T10:00:00Z"), Some(1_792_663_200));
+    }
+
+    /// A year with a sign is refused: `str::parse` read `+202` as 202.
+    #[test]
+    fn a_date_whose_year_has_a_sign_is_refused() {
+        refused(&["+202-10-22T10:00:00Z", "-202-10-22T10:00:00Z"]);
+    }
+
+    /// A month with a sign, 0 or past 12 is refused.
+    #[test]
+    fn a_date_whose_month_is_signed_or_out_of_range_is_refused() {
+        refused(&[
+            "2026-+1-22T10:00:00Z",
+            "2026--1-22T10:00:00Z",
+            "2026-00-22T10:00:00Z",
+            "2026-13-22T10:00:00Z",
+        ]);
+        assert_eq!(date_unix("2026-12-22T10:00:00Z"), Some(1_797_933_600));
+    }
+
+    /// A day with a sign, 0 or past 31 is refused.
+    #[test]
+    fn a_date_whose_day_is_signed_or_out_of_range_is_refused() {
+        refused(&[
+            "2026-10-+1T10:00:00Z",
+            "2026-10--1T10:00:00Z",
+            "2026-10-00T10:00:00Z",
+            "2026-10-32T10:00:00Z",
+        ]);
+        assert_eq!(date_unix("2026-10-31T10:00:00Z"), Some(1_793_440_800));
+    }
+
+    /// An hour with a sign or past 23 is refused.
+    #[test]
+    fn a_date_whose_hour_is_signed_or_out_of_range_is_refused() {
+        refused(&[
+            "2026-10-22T+1:00:00Z",
+            "2026-10-22T-1:00:00Z",
+            "2026-10-22T24:00:00Z",
+        ]);
+        assert_eq!(date_unix("2026-10-22T23:00:00Z"), Some(1_792_710_000));
+    }
+
+    /// A minute with a sign or past 59 is refused.
+    #[test]
+    fn a_date_whose_minute_is_signed_or_out_of_range_is_refused() {
+        refused(&[
+            "2026-10-22T10:+1:00Z",
+            "2026-10-22T10:-1:00Z",
+            "2026-10-22T10:60:00Z",
+        ]);
+        assert_eq!(date_unix("2026-10-22T10:59:00Z"), Some(1_792_666_740));
+    }
+
+    /// A second with a sign or past 60 is refused; 60 is a leap second.
+    #[test]
+    fn a_date_whose_second_is_signed_or_out_of_range_is_refused() {
+        refused(&[
+            "2026-10-22T10:00:+1Z",
+            "2026-10-22T10:00:-1Z",
+            "2026-10-22T10:00:61Z",
+        ]);
+        assert_eq!(date_unix("2026-10-22T10:00:60Z"), Some(1_792_663_260));
+    }
+
+    /// The field reader takes digits alone, one to its length.
+    #[test]
+    fn a_date_field_is_digits_alone() {
+        assert_eq!(date_field("07", 2), Some(7));
+        assert_eq!(date_field("2026", 4), Some(2026));
+        for (f, n) in [
+            ("", 2),
+            ("+7", 2),
+            ("-7", 2),
+            ("123", 2),
+            (" 7", 2),
+            ("7 ", 2),
+            ("٣", 2),
+        ] {
+            assert_eq!(date_field(f, n), None, "{f:?}");
+        }
     }
 
     /// SECURITY: Intel's identity JSON is parsed before its signature can

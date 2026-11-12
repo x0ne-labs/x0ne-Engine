@@ -3,7 +3,9 @@
 The crates `x0ne-core-kernels` (`kernels/`) and `x0ne-core-runtime`
 (`runtime/`) are x0ne Core's, copied unchanged (2026-11-04: greedy decoding
 on the device through a session, `Session::into_greedy`, 2 steps ahead of the
-caller, and `Session::into_greedy_ahead`). The copy is named by its content,
+caller, and `Session::into_greedy_ahead`; 2026-11-10: a config whose sizes
+overflow is refused, and a checkpoint is checked without listing the layers
+the config states). The copy is named by its content,
 not by a commit: the fingerprint below, whose first 12 digits `x0ne-infer`
 prints when it loads a model (`core: copy ...`). Nothing in them is changed
 here: a change is made in x0ne Core, then copied. x0ne Core's repository is
@@ -12,7 +14,7 @@ not public: the fingerprint below is the reference for this copy, and
 
 Copied (`crates/<path>` there, `<path>` here). Run from `crates/` there or
 from this directory here, `sha256sum <these files, in this order> | sha256sum`
-prints `43c553fb05b888ddf5e42f522a0ecc35c0f427685000ba5c8ae14992fa673012`.
+prints `10d4c8ea7890870c4239ed9981f367265458e63433ae8c43e15e98b035fafa8b`.
 
 - `kernels/Cargo.toml`
 - `kernels/build.rs`
@@ -50,9 +52,22 @@ inherit from. Its values are x0ne Core's (`version`, `edition`,
 `rust-version`, `authors`, `publish`, the pinned `half`, `memmap2`,
 `safetensors`, `serde_json`, `sha2`), except `license`: here the two crates
 are under AGPL-3.0-only, as the rest of the server (`LICENSING.md`,
-2026-11-02); and its members are these two crates only.
+2026-11-02); and its members are these two crates and `oracle/`.
 
-Not copied, kept in x0ne Core with the tests that need them: the CPU oracle
+Written here too: `oracle/` (`x0ne-core-oracle`), a CPU reference of every
+kernel and of the forward pass, and the tests of this copy against it. It is
+not x0ne Core's oracle and shares no file with it: it was written from the
+kernels' and the runtime's source, and restates x0ne Core's tolerances
+(`oracle/tests/common/mod.rs`). No shipped crate depends on it. Its `cpu_*`
+tests need no GPU (step `core` of `make ci`); its `gpu_*` tests and the
+`core-perf` example need one (`make core-gpu`), and are ignored without it,
+"needs the GPU": no test of it is ignored for another reason. The rates of
+`core-perf` are held to `ci/core-perf-baseline.json`, the regression ratchet
+of `make core-gpu`, not a published benchmark: it holds one run, Qwen3-0.6B on
+an RTX 5090 (2026-11-10). A defect of the copy that its tests find is fixed in
+x0ne Core, then copied.
+
+Not copied, kept in x0ne Core with the tests that need them: its own CPU oracle
 (`crates/oracle`, a dev-dependency of the runtime that a build of Engine
 never resolves), the tools (`crates/tools`: references, throughput benches),
 the frozen references (`refs/`), the runtime's integration tests

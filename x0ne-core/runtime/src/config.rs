@@ -20,6 +20,10 @@ pub struct Qwen3Config {
     pub tie_word_embeddings: bool,
 }
 
+/// A parsed config cannot overflow its derived sizes; the fields are public, so one built by
+/// hand can, and panics here instead of wrapping (2^57 heads gave q_dim 0 in release, 2026-11-04).
+const SIZES_FIT: &str = "a config's derived sizes overflow; from_json refuses such a config";
+
 fn get<'a>(v: &'a Value, key: &str) -> Result<&'a Value> {
     v.get(key)
         .ok_or_else(|| crate::Error::Format(format!("config.json: missing {key}")))
@@ -109,6 +113,7 @@ impl Qwen3Config {
         if c.vocab_size > u32::MAX as usize {
             return format_err("config.json: vocab_size does not fit a u32 token id");
         }
+        c.check_sizes()?;
         Ok(c)
     }
 
@@ -116,35 +121,98 @@ impl Qwen3Config {
         Self::from_json(&std::fs::read_to_string(path)?)
     }
 
+    /// Refuses a config one of whose derived sizes overflows: the rows of a projection, the
+    /// parameters of a layer, the KV bytes of a position, the bytes of all the weights. A parsed
+    /// config has passed it; the fields are public, so what takes a config checks it again.
+    pub(crate) fn check_sizes(&self) -> Result<()> {
+        let fit = self.linear_params().is_some()
+            && self.norm_params().is_some()
+            && self.kv_bytes().is_some()
+            && self.weight_bytes().is_some();
+        if !fit {
+            return format_err("config.json: a size derived from the config overflows");
+        }
+        Ok(())
+    }
+
+    fn q_rows(&self) -> Option<usize> {
+        self.num_attention_heads.checked_mul(self.head_dim)
+    }
+
+    fn kv_rows(&self) -> Option<usize> {
+        self.num_key_value_heads.checked_mul(self.head_dim)
+    }
+
+    fn packed_rows(&self) -> Option<usize> {
+        self.q_rows()?.checked_add(self.kv_rows()?.checked_mul(2)?)
+    }
+
+    fn linear_params(&self) -> Option<u64> {
+        let h = self.hidden_size as u64;
+        let attn = h
+            .checked_mul(self.packed_rows()? as u64)?
+            .checked_add((self.q_rows()? as u64).checked_mul(h)?)?;
+        let mlp = h
+            .checked_mul(3)?
+            .checked_mul(self.intermediate_size as u64)?;
+        attn.checked_add(mlp)
+    }
+
+    fn norm_params(&self) -> Option<u64> {
+        (self.hidden_size as u64)
+            .checked_mul(2)?
+            .checked_add((self.head_dim as u64).checked_mul(2)?)
+    }
+
+    fn kv_bytes(&self) -> Option<u64> {
+        let bytes = self.num_hidden_layers.checked_mul(4)?;
+        Some(bytes.checked_mul(self.kv_rows()?)? as u64)
+    }
+
+    /// The embedding, the final norm and the LM head unless tied, in parameters.
+    fn outer_params(&self) -> Option<u64> {
+        let embed = (self.vocab_size as u64).checked_mul(self.hidden_size as u64)?;
+        let copies = if self.tie_word_embeddings { 1 } else { 2 };
+        embed
+            .checked_mul(copies)?
+            .checked_add(self.hidden_size as u64)
+    }
+
+    /// Bytes of every weight of the dense model, bf16.
+    fn weight_bytes(&self) -> Option<u64> {
+        let layer = self.linear_params()?.checked_add(self.norm_params()?)?;
+        (self.num_hidden_layers as u64)
+            .checked_mul(layer)?
+            .checked_add(self.outer_params()?)?
+            .checked_mul(2)
+    }
+
     pub fn q_dim(&self) -> usize {
-        self.num_attention_heads * self.head_dim
+        self.q_rows().expect(SIZES_FIT)
     }
 
     pub fn kv_dim(&self) -> usize {
-        self.num_key_value_heads * self.head_dim
+        self.kv_rows().expect(SIZES_FIT)
     }
 
     /// Output rows of the packed [q; k; v] projection.
     pub fn qkv_rows(&self) -> usize {
-        self.q_dim() + 2 * self.kv_dim()
+        self.packed_rows().expect(SIZES_FIT)
     }
 
     /// Parameters of the seven projections of one layer (norms excluded).
     pub fn linear_params_per_layer(&self) -> u64 {
-        let h = self.hidden_size as u64;
-        let attn = h * self.qkv_rows() as u64 + self.q_dim() as u64 * h;
-        let mlp = 3 * h * self.intermediate_size as u64;
-        attn + mlp
+        self.linear_params().expect(SIZES_FIT)
     }
 
     /// Parameters of the norm weights of one layer.
     pub fn norm_params_per_layer(&self) -> u64 {
-        2 * self.hidden_size as u64 + 2 * self.head_dim as u64
+        self.norm_params().expect(SIZES_FIT)
     }
 
     /// K and V bytes stored per cached position, all layers, bf16.
     pub fn kv_bytes_per_position(&self) -> u64 {
-        (self.num_hidden_layers * 2 * self.kv_dim() * 2) as u64
+        self.kv_bytes().expect(SIZES_FIT)
     }
 }
 
@@ -205,7 +273,39 @@ impl Qwen3MoeConfig {
         if moe.num_experts > u32::MAX as usize {
             return format_err("config.json: num_experts does not fit a u32 expert id");
         }
-        Ok(Qwen3MoeConfig { base, moe })
+        let c = Qwen3MoeConfig { base, moe };
+        c.check_sizes()?;
+        Ok(c)
+    }
+
+    /// As `Qwen3Config::check_sizes`, with the router and the experts of every layer.
+    pub(crate) fn check_sizes(&self) -> Result<()> {
+        self.base.check_sizes()?;
+        if self.weight_bytes().is_none() {
+            return format_err("config.json: a size derived from the config overflows");
+        }
+        Ok(())
+    }
+
+    /// Bytes of every weight of the MoE model, bf16: per layer the attention, the norms, the
+    /// router and three projections per expert.
+    fn weight_bytes(&self) -> Option<u64> {
+        let (b, m) = (&self.base, &self.moe);
+        let (h, n) = (b.hidden_size as u64, m.num_experts as u64);
+        let attn = h
+            .checked_mul(b.packed_rows()? as u64)?
+            .checked_add((b.q_rows()? as u64).checked_mul(h)?)?;
+        let expert = h
+            .checked_mul(3)?
+            .checked_mul(m.moe_intermediate_size as u64)?;
+        let layer = attn
+            .checked_add(b.norm_params()?)?
+            .checked_add(n.checked_mul(h)?)?
+            .checked_add(n.checked_mul(expert)?)?;
+        (b.num_hidden_layers as u64)
+            .checked_mul(layer)?
+            .checked_add(b.outer_params()?)?
+            .checked_mul(2)
     }
 
     pub fn from_file(path: &Path) -> Result<Self> {

@@ -17,12 +17,18 @@
 
 x0ne Engine runs an open model inside a confidential virtual machine, in your own
 Google Cloud account: Intel TDX with one NVIDIA H100, the only setup supported
-today. Other clouds and your own TDX hosts are planned. Your machine first asks
+today. Other clouds and your own TDX hosts are planned. This is a preview:
+the cloud path does not start from this source tree yet, and every recorded
+run used a test build ([Status](#status)). Your machine first asks
 the VM for a hardware proof of what runs there, and checks it: the processor,
 the firmware, the image, the GPU and the model. No question and no session key
 go to the VM before that check says VERIFIED. Your applications then call it
 like the OpenAI API, and every answer comes back with a receipt signed inside
 the machine.
+
+A recorded session, not a command to copy: its relay was a test build and its
+reference was signed by the TEST key. With a relay built from this tree, `up`
+stops before it asks for the cloud token and creates nothing (exit 95).
 
 ```console
 $ x0ne-engine cloud up --project <project> --zone us-central1-a --model qwen3:32b \
@@ -56,10 +62,14 @@ $ x0ne-engine cloud up --project <project> --zone us-central1-a --model qwen3:32
   the engine before x0ne Core, and on 2026-11-04 on x0ne Core, a TEST run
   ([hardware runs](docs/hardware-runs.md)).
 - **Your cloud account, one VM per session.** `x0ne-engine cloud up` creates the
-  confidential VM in your Google Cloud project. It deletes itself at the end of
-  `--max-run`, and `x0ne-engine cloud down` deletes it sooner.
-- **OpenAI-compatible.** Existing clients point at `http://127.0.0.1:8478/v1`
-  with a local key; [docs/api.md](docs/api.md) lists what the API refuses.
+  confidential VM in your Google Cloud project: from a test build in every
+  recorded run, not from this tree yet ([Status](#status)). The VM is created
+  with a maximum run duration, `--max-run`, after which Google Cloud deletes
+  it, and `x0ne-engine cloud down` deletes it sooner.
+- **OpenAI-compatible, for text chats.** A client that sends plain text
+  messages points at `http://127.0.0.1:8478/v1` with a local key. Tool calls
+  get a 400 and a message whose `content` is an array of parts a 422;
+  [docs/api.md](docs/api.md) lists what the API refuses.
 - **Its own inference engine.** The model runs on x0ne Core, written for this
   project in Rust and CUDA: Qwen3 in BF16, on one GPU
   ([`x0ne-core`](x0ne-core/PROVENANCE.md)). On an H100, x0ne Core's own
@@ -70,9 +80,12 @@ $ x0ne-engine cloud up --project <project> --zone us-central1-a --model qwen3:32
 - **A signed receipt for every answer.** Signed inside the VM, it names the TDX
   environment, the device that computed the answer (`cuda:0`: x0ne Core runs
   on GPU 0 only) and the model's digest.
-- **Sealed by the caller, when you want it.** With `x0ne-sdk` (Rust, or wasm in
-  Node and the browser), your application checks the proof itself and seals its
-  request to a key the proof binds; the relay passes it on without reading it.
+- **Sealed by the caller, a prototype.** With `x0ne-sdk` (Rust, or wasm run
+  in Node; not yet in a browser tab), your application checks the proof itself
+  and seals its request to a key the proof binds; the relay passes it on
+  without reading it. A release build of the SDK admits no image reference
+  yet: it pins no release key and no log
+  ([what is left](docs/sdk-e2e.md#what-is-left-in-order)).
   Ran on H100 on 2026-10-28, 2026-10-30, 2026-10-31, 2026-11-01 (the answer
   streamed sealed through the relay) and, on x0ne Core, 2026-11-04; the
   records are kept outside this repository
@@ -397,9 +410,11 @@ What to expect:
 - `x0ne-infer` refuses to start outside a verified TEE and exits 87: this
   version's measurements file has TEST provenance, which a release build
   refuses first ([docs/running.md](docs/running.md)).
-- `x0ne-engine catalog` lists the five models a session can serve, all
+- `x0ne-engine catalog` lists the five models the catalog pins, all
   Qwen3: `qwen3:0.6b`, `qwen3:1.7b`, `qwen3:8b`, `qwen3:14b` and
-  `qwen3:32b`.
+  `qwen3:32b`. On hardware, this Engine on x0ne Core has served `qwen3:8b`
+  only, in one TEST run on 2026-11-04
+  ([hardware runs](docs/hardware-runs.md)).
 - `x0ne-engine cloud …` needs a fourth binary next to `x0ne-engine`,
   `x0ne-engine-cloud`, which the release archive and the `.deb` carry. From
   source: `cargo build --locked --release -p x0ne-engine-cloud --bin

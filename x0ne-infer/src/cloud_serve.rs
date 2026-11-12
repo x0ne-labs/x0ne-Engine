@@ -1134,6 +1134,8 @@ async fn load(
     };
     let lease =
         crate::serving_lease::ServingLease::new(lease, key.released_at()).on(st.standing.clone());
+    #[cfg(test)]
+    let lease = lease.ticking(st.serving.tick());
     drop(key);
     let salt = st.salt_source.clone();
     let server = ServerState {
@@ -1196,7 +1198,9 @@ async fn chat(
     // chat handler's refusals: its sentence names where the JSON broke.
     let body = match body {
         Ok(Json(body)) => body,
-        Err(rejected) => return crate::server::whole_refused(asked, rejected).await,
+        Err(rejected) => {
+            return crate::server::whole_refused(asked, st.serving.tick(), rejected).await
+        }
     };
     st.stats.chat_posts.fetch_add(1, Ordering::SeqCst);
     let server = {
@@ -1382,7 +1386,7 @@ async fn e2e_chat(
     };
     let sealed = match body {
         Ok(b) if (whole || chunked) && b.len() <= largest => b,
-        _ => return crate::e2e_gateway::refused(asked).await,
+        _ => return crate::e2e_gateway::refused(asked, server.lease.tick()).await,
     };
     let mut nonce = [0u8; x0ne_sdk::ohttp::RESPONSE_NONCE_LEN];
     nonce.copy_from_slice(&(st.salt_source)()[..x0ne_sdk::ohttp::RESPONSE_NONCE_LEN]);

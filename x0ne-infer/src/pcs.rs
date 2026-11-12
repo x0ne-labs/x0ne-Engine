@@ -74,6 +74,8 @@ impl TrustAnchor {
 pub enum PcsRejected {
     #[error("quote too short for a signature section: {0} bytes")]
     TooShort(usize),
+    #[error("quote header: {0}")]
+    Header(String),
     #[error("signature section malformed: {0}")]
     Malformed(String),
     #[error("certification data type {0} unsupported (expected 6: QE report certification data)")]
@@ -142,6 +144,10 @@ pub(crate) fn parse_sig_section(quote: &[u8]) -> Result<SigSection<'_>, PcsRejec
     if quote.len() < SIGNED_LEN + 4 {
         return Err(PcsRejected::TooShort(quote.len()));
     }
+    // SECURITY: what follows is the layout of a v4 quote signed with ECDSA
+    // on P-256 by Intel's QE. The header says so, or nothing of it is read.
+    x0ne_confidential::tdx_quote::check_header(quote)
+        .map_err(|e| PcsRejected::Header(e.to_string()))?;
     let mut off = SIGNED_LEN;
     // Checked: a u32 length plus an offset wraps a 32-bit usize (wasm32).
     let take = |off: &mut usize, n: usize, what: &str| -> Result<&[u8], PcsRejected> {
@@ -230,11 +236,74 @@ pub(crate) fn verify_cert_signed_by(
             "{what}: outside its validity window [{not_before}, {not_after}] at {now}"
         )));
     }
+    // RFC 5280, section 4.1.1.2: the algorithm written after the signed part
+    // MUST be the one inside it. The outer one is covered by no signature.
+    if !signature_algorithm_repeated(cert.as_raw()) {
+        return Err(PcsRejected::Chain(format!(
+            "{what}: the signed and the outer signature algorithms differ"
+        )));
+    }
     let sig = Signature::from_der(cert.signature_value.data.as_ref())
         .map_err(|e| PcsRejected::Chain(format!("{what}: signature not DER ECDSA: {e}")))?;
     issuer
         .verify(cert.tbs_certificate.as_ref(), &sig)
         .map_err(|_| PcsRejected::Chain(format!("{what}: signature does not verify")))
+}
+
+/// One DER element at the start of `der`: the whole of it, its content, and
+/// what follows. Definite lengths of at most four bytes, low tag numbers:
+/// all a certificate or a CRL needs up to its signature algorithms.
+fn der_element(der: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
+    let (tag, first) = (*der.first()?, *der.get(1)?);
+    if tag & 0x1f == 0x1f {
+        return None;
+    }
+    let (len, head) = if first < 0x80 {
+        (usize::from(first), 2)
+    } else {
+        let n = usize::from(first & 0x7f);
+        if n == 0 || n > 4 {
+            return None;
+        }
+        let mut len = 0u32;
+        for b in der.get(2..2 + n)? {
+            len = len << 8 | u32::from(*b);
+        }
+        (usize::try_from(len).ok()?, 2 + n)
+    };
+    let end = head.checked_add(len)?;
+    let whole = der.get(..end)?;
+    Some((whole, &whole[head..], &der[end..]))
+}
+
+/// RFC 5280, sections 4.1.1.2 and 5.1.1.2, byte for byte: whether the
+/// `AlgorithmIdentifier` written after the signed part of `signed`, the DER
+/// of a certificate or of a CRL, is the one written inside it, tags, lengths
+/// and parameters included. No signature covers the outer one, and
+/// x509-parser 0.18 reads neither the tag of its SEQUENCE nor the tag of its
+/// OID: comparing what it parsed let one bit of each change. Shared by every
+/// X.509 verifier of the crate; `false` for anything that is not DER of that
+/// shape.
+///
+/// The signed one is the element after the version and the serial number of
+/// a `TBSCertificate`, after the version of a `TBSCertList`: the first that
+/// is neither `[0]` nor an INTEGER.
+pub(crate) fn signature_algorithm_repeated(signed: &[u8]) -> bool {
+    const SEQUENCE: u8 = 0x30;
+    let read = || {
+        let (_, content, _) = der_element(signed)?;
+        let (_, mut tbs, after) = der_element(content)?;
+        let (outer, _, _) = der_element(after)?;
+        let inner = loop {
+            let (element, _, rest) = der_element(tbs)?;
+            if !matches!(element[0], 0xa0 | 0x02) {
+                break element;
+            }
+            tbs = rest;
+        };
+        Some(outer[0] == SEQUENCE && outer == inner)
+    };
+    read().unwrap_or(false)
 }
 
 /// Does this root certificate satisfy the anchor? Shared with the live-TCB
@@ -504,9 +573,7 @@ pub(crate) mod tests {
         td_attributes: [u8; 8],
     ) -> Fixture {
         // The quote: header (v4, TDX) + body; `signed` adds the signature.
-        let mut quote = vec![0u8; SIGNED_LEN];
-        quote[0] = 4; // version
-        quote[4] = 0x81; // tee_type = TDX
+        let mut quote = td_quote_header_and_body();
         quote[SIGNED_LEN - 64..].copy_from_slice(&report_data);
         // Distinct, non-zero registers: an all-zero body would let a
         // pinning test pass against a parser that read nothing at all.
@@ -515,6 +582,18 @@ pub(crate) mod tests {
         quote[48 + 376..48 + 424].copy_from_slice(&[0xb2; 48]); // rtmr1
         quote[48 + 120..48 + 128].copy_from_slice(&td_attributes);
         signed(leaf_window, quote)
+    }
+
+    /// The header of a TD Quote v4 as Intel's QE writes it (version 4,
+    /// ECDSA P-256, TDX, Intel's QE vendor) and an all-zero TD report: the
+    /// signed part of every synthetic quote of the tests.
+    pub(crate) fn td_quote_header_and_body() -> Vec<u8> {
+        let mut quote = vec![0u8; SIGNED_LEN];
+        quote[0] = 4; // version
+        quote[2] = 2; // att_key_type = ECDSA with P-256
+        quote[4] = 0x81; // tee_type = TDX
+        quote[12..28].copy_from_slice(&x0ne_confidential::tdx_quote::INTEL_QE_VENDOR_ID);
+        quote
     }
 
     /// The header and TD report of `quote`, signed under this module's root:
@@ -660,9 +739,7 @@ pub(crate) mod tests {
     /// A quote whose QE report the key `signer_der` signs, `chain` and this
     /// module's root as its PCK chain.
     fn quote_with_chain(chain: &str, signer_der: &[u8]) -> Fixture {
-        let mut quote = vec![0u8; SIGNED_LEN];
-        quote[0] = 4;
-        quote[4] = 0x81;
+        let quote = td_quote_header_and_body();
         let chain_pem = format!("{chain}{}", pem_of(&root().1));
         let signer = p256_of(&KeyPair::try_from(signer_der).unwrap());
         Fixture {
@@ -765,9 +842,7 @@ pub(crate) mod tests {
         let root = Issuer::new(p, kp);
         let (ca_pem, ca, ca_key) = issued("Intel SGX PCK Platform CA", Some(true), &root);
         let (pem, _, key) = issued("Intel SGX PCK Certificate", None, &issuer_of(&ca, &ca_key));
-        let mut quote = vec![0u8; SIGNED_LEN];
-        quote[0] = 4;
-        quote[4] = 0x81;
+        let quote = td_quote_header_and_body();
         let chain = format!("{pem}{ca_pem}{}", pem_of(&root_der));
         let quote = with_signature(
             quote,
@@ -1006,6 +1081,126 @@ pub(crate) mod tests {
             .map(|b| format!("{b:02x}"))
             .collect();
         assert_eq!(got, INTEL_SGX_ROOT_CA_SPKI_SHA256_HEX);
+    }
+
+    /// SECURITY: the header's `att_key_type` says which key signs the quote;
+    /// this module reads a P-256 key and signature whatever it says. Any
+    /// other type is refused before the signature section is read, in a
+    /// quote whose every signature holds, and the refusal names the field.
+    #[test]
+    fn a_quote_whose_att_key_type_is_not_ecdsa_p256_is_refused_by_name() {
+        let fx = build_fixture();
+        for other in [0u16, 1, 3, 0x0200, u16::MAX] {
+            let mut q = fx.quote[..SIGNED_LEN].to_vec();
+            q[2..4].copy_from_slice(&other.to_le_bytes());
+            let fx = fixture_signing(&q);
+            let e = verify_tdx_chain(&fx.quote, &TrustAnchor::RootDer(fx.root_der), NOW)
+                .expect_err("a quote under another attestation key type verifies")
+                .to_string();
+            assert!(
+                e.contains(&format!("att_key_type {other}")) && e.contains("expected 2"),
+                "{e}"
+            );
+            // Before anything of the signature section: with none at all.
+            let e = parse_sig_section(&[&q[..], &[0u8; 4]].concat())
+                .err()
+                .expect("a quote with an empty signature section is read")
+                .to_string();
+            assert!(e.contains("att_key_type"), "{e}");
+        }
+    }
+
+    /// The same for the QE vendor: Intel's, as Intel's verifier requires.
+    #[test]
+    fn a_quote_whose_qe_vendor_is_not_intel_is_refused_by_name() {
+        let fx = build_fixture();
+        let mut q = fx.quote[..SIGNED_LEN].to_vec();
+        q[27] ^= 0x80;
+        let fx = fixture_signing(&q);
+        let e = verify_tdx_chain(&fx.quote, &TrustAnchor::RootDer(fx.root_der), NOW)
+            .expect_err("a quote of another QE vendor verifies")
+            .to_string();
+        assert!(e.contains("qe_vendor_id"), "{e}");
+    }
+
+    /// The two real quotes of the tree carry what the header checks require.
+    #[test]
+    fn the_real_quotes_carry_the_header_the_verifier_requires() {
+        for q in [
+            &include_bytes!("../tests/pcs_live/quote.dat")[..],
+            &include_bytes!("../tests/run_fixtures/gce-a3-tdx-2026-10-18.quote")[..],
+        ] {
+            assert_eq!(q[..12], [4, 0, 2, 0, 0x81, 0, 0, 0, 0, 0, 0, 0]);
+            assert_eq!(
+                q[12..28],
+                [
+                    0x93, 0x9a, 0x72, 0x33, 0xf7, 0x9c, 0x4c, 0xa9, 0x94, 0x0a, 0x0d, 0xb3, 0x95,
+                    0x7f, 0x06, 0x07
+                ]
+            );
+            parse_sig_section(q)
+                .map(|_| ())
+                .expect("the signature section is read");
+        }
+    }
+
+    /// RFC 5280, section 4.1.1.2, byte for byte: the outer algorithm is the
+    /// signed one only when its DER is. One bit of it, the two tags
+    /// x509-parser does not read included, and the certificate is refused.
+    #[test]
+    fn a_certificate_whose_outer_algorithm_differs_by_one_bit_is_refused() {
+        let der = &include_bytes!("../tests/intel_sgx_root_ca.der")[..];
+        let (_, root) = X509Certificate::from_der(der).expect("Intel root parses");
+        let key = p256_key_from_cert(&root).unwrap();
+        // Inside its window (2018..2049).
+        let now = 1_792_000_000;
+        verify_cert_signed_by(&root, &key, "root", now).expect("Intel's root, intact");
+        let tbs = root.tbs_certificate.as_ref();
+        let at = 4 + tbs.len();
+        assert_eq!(der[..4], [0x30, 0x82, 0x02, 0x8f]);
+        assert_eq!(
+            der[at..at + 12],
+            [0x30, 0x0a, 6, 8, 0x2a, 0x86, 0x48, 0xce, 0x3d, 4, 3, 2]
+        );
+        let mut parsed_and_refused = 0;
+        for byte in at..at + 12 {
+            for bit in 0..8 {
+                let mut m = der.to_vec();
+                m[byte] ^= 1 << bit;
+                assert!(!signature_algorithm_repeated(&m), "byte {byte} bit {bit}");
+                let Ok((_, c)) = X509Certificate::from_der(&m) else {
+                    continue;
+                };
+                let e = verify_cert_signed_by(&c, &key, "root", now)
+                    .expect_err("a root with one bit of its outer algorithm changed verifies")
+                    .to_string();
+                assert!(
+                    e.contains("algorithms differ"),
+                    "byte {byte} bit {bit}: {e}"
+                );
+                parsed_and_refused += 1;
+            }
+        }
+        // The two tags x509-parser does not read give certificates it parses.
+        assert!(parsed_and_refused >= 2, "{parsed_and_refused}");
+    }
+
+    /// What `signature_algorithm_repeated` reads: a certificate and a CRL as
+    /// they are, and nothing that is not DER of that shape.
+    #[test]
+    fn the_two_algorithms_are_found_in_a_certificate_and_in_a_crl() {
+        let cert = &include_bytes!("../tests/intel_sgx_root_ca.der")[..];
+        let crl = &include_bytes!("../tests/pcs_live/2026-10-23/root_ca_crl.der")[..];
+        assert!(signature_algorithm_repeated(cert));
+        assert!(signature_algorithm_repeated(crl));
+        for n in 0..cert.len() {
+            assert!(!signature_algorithm_repeated(&cert[..n]), "{n} bytes");
+        }
+        assert!(!signature_algorithm_repeated(&[]));
+        assert!(!signature_algorithm_repeated(&[0x30, 0x80, 0, 0]));
+        assert!(!signature_algorithm_repeated(&[
+            0x30, 0x84, 0xff, 0xff, 0xff, 0xff
+        ]));
     }
 
     /// A truncated signature section is malformed, never a panic.

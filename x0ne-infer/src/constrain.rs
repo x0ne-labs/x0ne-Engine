@@ -173,6 +173,22 @@ impl TokenTable {
     pub fn bytes(&self, id: u32) -> Option<&[u8]> {
         self.bytes.get(id as usize).and_then(|b| b.as_deref())
     }
+
+    /// The heap bytes the table asked for, by its vectors' capacities (the
+    /// allocator's own rounding is not in it).
+    #[cfg(test)]
+    pub(crate) fn heap_bytes(&self) -> usize {
+        use std::mem::size_of;
+        let text: usize = self.bytes.iter().flatten().map(|b| b.len()).sum();
+        let bucket = |b: &Bucket| (b.ids.capacity() + b.at.capacity()) * size_of::<u32>();
+        let buckets = |v: &Vec<Bucket>| {
+            v.capacity() * size_of::<Bucket>() + v.iter().map(bucket).sum::<usize>()
+        };
+        text + self.bytes.capacity() * size_of::<Option<Box<[u8]>>>()
+            + self.neutral.capacity() * size_of::<u32>()
+            + buckets(&self.by_first)
+            + buckets(&self.all_by_first)
+    }
 }
 
 /// One answer's constraint: the automaton's state and the bytes fed so far.
@@ -299,6 +315,18 @@ impl<'a> Constraint<'a> {
     /// mask let through (U+FFFD for a character cut at the end).
     pub fn joins_to(&self, text: &str) -> bool {
         String::from_utf8_lossy(&self.fed) == text
+    }
+
+    /// The bytes the mask let through, up to the last whole character. A
+    /// budget may end between two tokens of one character: decoded, its first
+    /// bytes read U+FFFD, which is no start of a document where the schema
+    /// spells the text (a key, an `enum` value) and another character where
+    /// it does not. The answer is the document as far as it was written.
+    pub fn text(&self) -> &str {
+        match std::str::from_utf8(&self.fed) {
+            Ok(text) => text,
+            Err(e) => std::str::from_utf8(&self.fed[..e.valid_up_to()]).unwrap_or_default(),
+        }
     }
 
     #[cfg(test)]
@@ -574,6 +602,25 @@ pub(crate) mod tests {
         assert!(e.contains("Metaspace"), "{e}");
     }
 
+    /// A table's memory is bounded by its vocabulary: the tokens' bytes, one
+    /// slice (16 bytes) per id, each offered id in two lists a `push` grew
+    /// (twice its length at most, four ids at least), and 512 buckets of 258
+    /// offsets whatever the vocabulary.
+    #[test]
+    fn a_table_is_no_larger_than_its_vocabulary_allows() {
+        let tok = byte_level_bpe();
+        let t = TokenTable::from_tokenizer(&tok, &[]).unwrap();
+        let ids = t.len();
+        let offered: Vec<&[u8]> = (0..ids as u32).filter_map(|i| t.bytes(i)).collect();
+        let text: usize = offered.iter().map(|b| b.len()).sum();
+        let fixed = 512 * (std::mem::size_of::<Bucket>() + 258 * 4);
+        let lists = 2 * 2 * 4 * offered.len() + 513 * 4 * 4;
+        let bound = text + 16 * ids + lists + fixed;
+        let asked = t.heap_bytes();
+        assert!(asked <= bound, "{asked} bytes for {ids} ids, bound {bound}");
+        assert!(asked >= text + 16 * ids + 2 * 4 * offered.len() + fixed);
+    }
+
     /// Measured, not asserted: the mask's cost on a real vocabulary. Run with
     /// `X0NE_TOKENIZER_JSON=<tokenizer.json> cargo test -p x0ne-infer --release
     /// constrain::tests::mask_cost -- --ignored --nocapture`.
@@ -595,6 +642,36 @@ pub(crate) mod tests {
         println!(
             "table: {} ids, {offered} offered, built in {built:?}",
             t.len()
+        );
+        println!("table: {} heap bytes asked", t.heap_bytes());
+        // What a request pays for its table: read for it alone, or kept.
+        let mut reads: Vec<std::time::Duration> = (0..20)
+            .map(|_| {
+                let t0 = std::time::Instant::now();
+                std::hint::black_box(TokenTable::from_tokenizer(&tok, &eos).unwrap());
+                t0.elapsed()
+            })
+            .collect();
+        reads.sort();
+        println!(
+            "a table read per request, 20 reads: min {:?}, median {:?}, max {:?}",
+            reads[0], reads[10], reads[19]
+        );
+        let cache = crate::stepped::TableCache::default();
+        let t0 = std::time::Instant::now();
+        cache.read(&tok, &eos).unwrap();
+        let first = t0.elapsed();
+        let mut kept: Vec<std::time::Duration> = (0..1000)
+            .map(|_| {
+                let t0 = std::time::Instant::now();
+                std::hint::black_box(cache.read(&tok, &eos).unwrap());
+                t0.elapsed()
+            })
+            .collect();
+        kept.sort();
+        println!(
+            "a kept table: first read {first:?}, then 1000 reads: median {:?}, max {:?}",
+            kept[500], kept[999]
         );
         let s = JsonSchema::compile(&json!({"type": "object", "properties": {
             "name": {"type": "string"}, "age": {"type": "integer"},

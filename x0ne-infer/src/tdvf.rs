@@ -337,8 +337,11 @@ fn validate(sections: &[Section], image_len: usize) -> Result<(), String> {
                     s.raw_size, s.memory_size
                 ));
             }
-            let end = s.data_offset as usize + s.raw_size as usize;
-            if end > image_len {
+            // In u64: two u32 from the file add up past a 32-bit usize
+            // (wasm32, through x0ne-sdk), where the sum would wrap under
+            // the image's length.
+            let end = u64::from(s.data_offset) + u64::from(s.raw_size);
+            if end > image_len as u64 {
                 return Err(format!(
                     "section {k}: volume {:#x}+{:#x} runs past the image",
                     s.data_offset, s.raw_size
@@ -366,8 +369,8 @@ fn validate(sections: &[Section], image_len: usize) -> Result<(), String> {
             }
             if a.kind.is_volume()
                 && b.kind.is_volume()
-                && a.data_offset < b.data_offset + b.raw_size
-                && b.data_offset < a.data_offset + a.raw_size
+                && u64::from(a.data_offset) < u64::from(b.data_offset) + u64::from(b.raw_size)
+                && u64::from(b.data_offset) < u64::from(a.data_offset) + u64::from(a.raw_size)
             {
                 return Err(format!("volume {j} overlaps volume {i} in the image"));
             }
@@ -672,6 +675,20 @@ pub(crate) mod tests {
                 "length",
                 Box::new(|b| put_u32(b, DESCRIPTOR_AT + 4, 16 + 32 * 5)),
                 "length",
+            ),
+            (
+                // 0xFFFFF000 + 0x3000 wraps to 0x2000 in 32 bits, under the
+                // image's length: a 32-bit usize must not take it for an end.
+                "a volume whose offset and size wrap in 32 bits",
+                Box::new(|b| put_u32(b, section_at(0), 0xFFFF_F000)),
+                "runs past the image",
+            ),
+            (
+                // The CFV at 0xFFFFE000 + 0x1000 ends within 32 bits; its
+                // overlap with the BFV is then compared in 64 bits.
+                "a volume at the top of 32 bits",
+                Box::new(|b| put_u32(b, section_at(1), 0xFFFF_E000)),
+                "runs past the image",
             ),
             (
                 "unknown section type",

@@ -2,10 +2,15 @@
 //! Every exit of `up` after the creation started goes through `cleanup`,
 //! which deletes the VM and its firewall rule; a failed deletion is exit 94.
 
+use std::any::Any;
+use std::future::{poll_fn, Future};
 use std::os::unix::process::ExitStatusExt as _;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::pin::pin;
 use std::process::{ExitStatus, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::task::Poll;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -707,7 +712,18 @@ pub async fn up(o: &Opts, ctx: &Ctx<'_>, front: &Front) -> Result<(), Failure> {
     }
 
     let mut stops = Stops::install(ctx.paths, &req.session_id)?;
-    let result = session(o, ctx, front, &req, &pf, q, &proxy_path, &mut stops, &run).await;
+    let result = Box::pin(session(
+        o,
+        ctx,
+        front,
+        &req,
+        &pf,
+        q,
+        &proxy_path,
+        &mut stops,
+        &run,
+    ))
+    .await;
     let _ = std::fs::remove_file(ctx.paths.socket());
     match &result {
         Ok(()) => stops.finish(0, "session ended; VM deleted").await,
@@ -843,8 +859,22 @@ async fn session(
         nras_key: req.nras_key.clone(),
     };
     live.save("creating");
-    let outcome = drive(&mut live, &config, stops).await;
+    // A panic in `drive` is a bug of this program, and the VM is billed all
+    // the same: the deletion runs first, then the panic goes on (exit 101).
+    let outcome = caught(Box::pin(drive(&mut live, &config, stops))).await;
     let cleaned = cleanup(&mut live, stops).await;
+    let outcome = match outcome {
+        Ok(o) => o,
+        Err(panic) => {
+            // A deletion that is not confirmed is what the user must read last (94).
+            cleaned?;
+            let _ = std::fs::remove_file(ctx.paths.socket());
+            stops
+                .finish(101, "up failed (a bug, see its output); VM deleted")
+                .await;
+            std::panic::resume_unwind(panic)
+        }
+    };
     match (outcome, cleaned) {
         (Ok(Ended::Stopped(r)), Ok(())) => {
             sayln!("Session {}.", stop_text(&r));
@@ -869,6 +899,33 @@ async fn session(
         (_, Err(e)) | (Err(e), Ok(())) => Err(e),
     }
 }
+
+/// `fut` to its end, or the panic that stopped it: what it borrowed is free
+/// again either way.
+async fn caught<T>(fut: impl Future<Output = T>) -> Result<T, Box<dyn Any + Send>> {
+    let mut fut = pin!(fut);
+    poll_fn(
+        |cx| match catch_unwind(AssertUnwindSafe(|| fut.as_mut().poll(cx))) {
+            Ok(Poll::Pending) => Poll::Pending,
+            Ok(Poll::Ready(v)) => Poll::Ready(Ok(v)),
+            Err(panic) => Poll::Ready(Err(panic)),
+        },
+    )
+    .await
+}
+
+/// Test builds only: panics at the step `X0NE_ENGINE_CLOUD_TEST_PANIC_AT`
+/// names, as a bug of `up` would anywhere after the creation started.
+#[cfg(feature = "test-endpoints")]
+fn test_panic(knobs: &Knobs, step: &str) {
+    assert!(
+        knobs.panic_at.as_deref() != Some(step),
+        "X0NE_ENGINE_CLOUD_TEST_PANIC_AT={step}"
+    );
+}
+
+#[cfg(not(feature = "test-endpoints"))]
+fn test_panic(_: &Knobs, _: &str) {}
 
 /// Everything from creation to the end of serving. Never deletes: the caller does.
 async fn drive(live: &mut Live<'_>, config: &[u8], stops: &mut Stops) -> Result<Ended, Failure> {
@@ -902,6 +959,7 @@ async fn drive(live: &mut Live<'_>, config: &[u8], stops: &mut Stops) -> Result<
     );
     let t0 = Instant::now();
     live.created = t0;
+    test_panic(knobs, "creating");
     let mut stop_seen = None;
     let created = {
         let create = ctx.provider.create(&req, &live.inst, config);
@@ -934,6 +992,7 @@ async fn drive(live: &mut Live<'_>, config: &[u8], stops: &mut Stops) -> Result<
 
     // [2/5] Boot: RUNNING with an external address, within the boot timeout.
     live.save("booting");
+    test_panic(knobs, "booting");
     say!(
         "{} ... ",
         paint(on, Style::Bold, "[2/5] Waiting for boot and GPU setup")
@@ -983,6 +1042,7 @@ async fn drive(live: &mut Live<'_>, config: &[u8], stops: &mut Stops) -> Result<
     // holds the session config (and the NRAS key, if given); no question and
     // no session key leave before the verdict.
     live.save("verifying");
+    test_panic(knobs, "verifying");
     sayln!(
         "{}",
         paint(
@@ -1161,8 +1221,9 @@ async fn drive(live: &mut Live<'_>, config: &[u8], stops: &mut Stops) -> Result<
             input,
         )?);
     }
+    test_panic(knobs, "serving");
     let expiry = Instant::now() + Duration::from_secs(left);
-    let mut failed_polls = 0;
+    let mut failed_polls: u32 = 0;
     let mut next_poll = Instant::now() + knobs.serve_poll;
     loop {
         tokio::select! {
@@ -1188,25 +1249,33 @@ async fn drive(live: &mut Live<'_>, config: &[u8], stops: &mut Stops) -> Result<
                 Ok(Some(_)) => {}
                 Err(e) => return Err(Failure::RelayFailed(e)),
             },
-            _ = sleep_until(next_poll.into()), if failed_polls < 3 => {
-                next_poll = Instant::now() + knobs.serve_poll;
+            _ = sleep_until(next_poll.into()) => {
                 match ctx.provider.instance_state(&live.inst).await {
                     Ok(VmState::Gone | VmState::Stopped(_)) => {
                         sayln!("      {}", paint(on, Style::Fail, "The VM is gone: Google stopped it (spot preemption)."));
                         return Err(Failure::VmLost("Google stopped the VM (spot preemption)".into()));
                     }
-                    Ok(_) => failed_polls = 0,
+                    Ok(_) => {
+                        if failed_polls >= 3 {
+                            sayln!("      {}", paint(on, Style::Dim, "(the provider answers again: preemption is watched)"));
+                        }
+                        failed_polls = 0;
+                    }
                     Err(_) => {
-                        failed_polls += 1;
+                        failed_polls = failed_polls.saturating_add(1);
                         if failed_polls == 3 {
                             sayln!(
                                 "      {}",
                                 paint(on, Style::Warn, "(the provider no longer answers, the token may have expired: \
-                                 preemption is not watched any more; the VM still deletes itself at the end)")
+                                 a preemption is not seen until it answers again; the VM still deletes itself at the end)")
                             );
                         }
                     }
                 }
+                // The watch never stops. A provider that fails is asked less
+                // often: the pause doubles from the third failure, up to 16 times.
+                let slower = failed_polls.saturating_sub(2).min(4);
+                next_poll = Instant::now() + knobs.serve_poll * (1 << slower);
             }
         }
     }

@@ -19,6 +19,7 @@
 //! Zero retention: prompts and outputs live for the request; the state holds
 //! the model, the proof, the identity — no request text.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use axum::extract::rejection::JsonRejection;
@@ -29,11 +30,11 @@ use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
 use serde::{Deserialize, Serialize};
 
-use crate::backend::{Completion, GenerationParams, LoadedModel, NoSink};
+use crate::backend::{Completion, GenerationParams, LoadedModel, TokenSink};
 use crate::binding::SessionIdentity;
 use crate::conversation::{Route, Turn};
 use crate::gate::Attested;
-use crate::openai::error::{ApiError, INTERNAL};
+use crate::openai::error::{ApiError, BodyLate, INTERNAL};
 use crate::receipt;
 
 pub struct ServerState {
@@ -205,20 +206,21 @@ async fn chat_answer(
     // the name they quote: 162 to 559 and 264 to 660 bytes.
     let body = match body {
         Ok(Json(body)) => body,
-        Err(rejected) => return whole_refused(asked, rejected).await,
+        Err(rejected) => return whole_refused(asked, state.lease.tick(), rejected).await,
     };
     let mut req = match parse_chat_request(body) {
         Ok(req) => req,
-        Err(refused) => return whole_refused(asked, refused).await,
+        Err(refused) => return whole_refused(asked, state.lease.tick(), refused).await,
     };
     match crate::openai::models::served(&req.model, served) {
         Ok(id) => req.model = id.to_string(),
-        Err(refused) => return whole_refused(asked, refused).await,
+        Err(refused) => return whole_refused(asked, state.lease.tick(), refused).await,
     }
     let slot = slot.map(|Extension(slot)| slot).unwrap_or_default();
     if req.stream {
         return chat_stream(state, req, slot, asked, route).await;
     }
+    let caller = slot.caller();
     let started = now_unix();
     // The payload is dropped unread: it may quote the prompt.
     let admitted =
@@ -226,13 +228,13 @@ async fn chat_answer(
             .unwrap_or_else(|_| Err((StatusCode::INTERNAL_SERVER_ERROR, internal.into())));
     let (prompt, params) = match admitted {
         Ok(admitted) => admitted,
-        Err(refused) => return whole_refused(asked, refused).await,
+        Err(refused) => return whole_refused(asked, state.lease.tick(), refused).await,
     };
     let conversation = conversation_turn(&state, &req, route);
     let mut turn = state.lease.take_turn().await;
     turn.hold(slot.take());
     // Its own task: a panic ends it, not this turn, which still ends on time.
-    let whole = chat_whole(state, req, prompt, params, conversation, started);
+    let whole = chat_whole(state, req, prompt, params, conversation, started, caller);
     let answered = tokio::spawn(whole)
         .await
         .unwrap_or_else(|_| Err((StatusCode::INTERNAL_SERVER_ERROR, internal.into())));
@@ -252,11 +254,10 @@ async fn chat_answer(
 /// floor after `asked`.
 pub(crate) async fn whole_refused(
     asked: tokio::time::Instant,
+    tick: crate::padding::Tick,
     refused: impl Into<ApiError>,
 ) -> Response {
-    let floor = crate::stream::TICK
-        .saturating_mul(u32::try_from(crate::padding::MIN_TICKS).unwrap_or(u32::MAX));
-    tokio::time::sleep_until(asked + floor).await;
+    tokio::time::sleep_until(asked + tick.floor()).await;
     error_padded(refused)
 }
 
@@ -352,6 +353,7 @@ async fn chat_whole(
     params: GenerationParams,
     conversation: Option<Arc<Turn>>,
     started: u64,
+    caller: Caller,
 ) -> Result<Json<ChatResponse>, (StatusCode, String)> {
     let max_tokens = params.max_tokens;
     let mut decoding = Decoding::of(&params);
@@ -362,12 +364,14 @@ async fn chat_whole(
     let completion = {
         let state = state.clone();
         let prompt = prompt.clone();
+        // The caller is the sink: gone, the generation stops at its next step.
+        let mut caller = caller;
         tokio::task::spawn_blocking(move || {
             state.lease.run_live(|| match conversation.as_deref() {
-                None => state.model.generate_with(&prompt, &params),
+                None => state.model.generate_whole(&prompt, &params, &mut caller),
                 turn => state
                     .model
-                    .generate_turn(&prompt, &params, turn, &mut NoSink),
+                    .generate_turn(&prompt, &params, turn, &mut caller),
             })
         })
         .await
@@ -541,7 +545,7 @@ async fn chat_stream(
     let started_at = now_unix();
     let (prompt, params) = match admit_chat(&state, &req) {
         Ok(admitted) => admitted,
-        Err(refused) => return whole_refused(asked, refused).await,
+        Err(refused) => return whole_refused(asked, state.lease.tick(), refused).await,
     };
     let conversation = conversation_turn(&state, &req, route);
     // Held by `supervise` past the generation: the next answer starts when
@@ -550,6 +554,7 @@ async fn chat_stream(
     // no GPU and blocks nobody.
     let mut turn = state.lease.take_turn().await;
     let began = tokio::time::Instant::now();
+    let tick = state.lease.tick();
     turn.hold(slot.take());
     let max_tokens = params.max_tokens;
     let mut decoding = Decoding::of(&params);
@@ -566,13 +571,17 @@ async fn chat_stream(
         let state = state.clone();
         let prompt = prompt.clone();
         let tx = tx.clone();
+        let caller = slot.caller();
         tokio::task::spawn_blocking(move || -> Generation {
-            let mut sink = crate::stream::ChannelSink::new(tx);
+            let mut sink = UntilTheHeader {
+                sink: crate::stream::ChannelSink::new(tx),
+                caller,
+            };
             let ran = state.lease.run_live(|| {
                 let turn = conversation.as_deref();
                 state.model.generate_turn(&prompt, &params, turn, &mut sink)
             });
-            (ran, sink.started, sink.text)
+            (ran, sink.sink.started, sink.sink.text)
         })
     };
     tokio::spawn(supervise(
@@ -587,14 +596,14 @@ async fn chat_stream(
     // panic: padded, a size of ticks after the turn began, as `chat_answer`'s.
     // At once, its time and size told the prompt's token count or the panic's.
     if let Some(refused) = refused {
-        let after = crate::padding::release_after(began.elapsed(), crate::stream::TICK);
+        let after = crate::padding::release_after(began.elapsed(), tick.period());
         tokio::time::sleep_until(began + after).await;
         return error_padded(refused);
     }
     let body = crate::stream::SseBody::new(
         rx,
         shape,
-        crate::stream::Clock::start(),
+        crate::stream::Clock::ticking(tick),
         tokio::time::Instant::now(),
     )
     .holding(open);
@@ -796,7 +805,8 @@ fn finale(
 /// hidden") and both servers wrote `"stop"` in a literal. Seen on 2026-09-19
 /// on the first RTX 5090 run: 256 tokens asked, 256 returned, `"stop"`.
 /// 413 for a prompt that does not fit, 400 for sampling asked of a greedy-only
-/// backend or a schema of one that cannot mask, 500 for anything else — shared by both servers so they cannot
+/// backend or a schema of one that cannot mask, a conversation of one that
+/// keeps none, or messages its template refuses, 500 for anything else — shared by both servers so they cannot
 /// drift apart.
 pub fn generate_error(e: anyhow::Error) -> (StatusCode, String) {
     if let Some(too_long) = e.downcast_ref::<crate::backend::PromptTooLong>() {
@@ -810,6 +820,9 @@ pub fn generate_error(e: anyhow::Error) -> (StatusCode, String) {
     }
     if let Some(none) = e.downcast_ref::<crate::backend::ConversationUnsupported>() {
         return (StatusCode::BAD_REQUEST, none.to_string());
+    }
+    if let Some(order) = e.downcast_ref::<crate::backend::ChatRefused>() {
+        return (StatusCode::BAD_REQUEST, order.to_string());
     }
     (StatusCode::INTERNAL_SERVER_ERROR, format!("generate: {e}"))
 }
@@ -1036,6 +1049,24 @@ pub struct Serving {
     /// `Host` values `serve_with` answers. The cloud
     /// TD does not read it: mutual TLS stands in front of every request.
     pub allowed_hosts: AllowedHosts,
+    /// The tick the cloud TD pads at, in this crate's unit tests only
+    /// ([`crate::padding::Tick`]): a build that serves has no such field.
+    #[cfg(test)]
+    pub tick: crate::padding::Tick,
+}
+
+impl Serving {
+    /// The tick of the time padding: [`crate::padding::Tick::PRODUCTION`].
+    #[cfg(not(test))]
+    pub(crate) fn tick(&self) -> crate::padding::Tick {
+        crate::padding::Tick::PRODUCTION
+    }
+
+    /// The tick of the time padding.
+    #[cfg(test)]
+    pub(crate) fn tick(&self) -> crate::padding::Tick {
+        self.tick
+    }
 }
 
 /// `--max-queue` when the operator names none.
@@ -1046,6 +1077,8 @@ impl Default for Serving {
         Self {
             admission: Admission::new(DEFAULT_MAX_QUEUE),
             allowed_hosts: AllowedHosts::loopback(),
+            #[cfg(test)]
+            tick: crate::padding::Tick::PRODUCTION,
         }
     }
 }
@@ -1178,6 +1211,8 @@ pub async fn check_host(
 /// response.
 #[derive(Clone, Default)]
 pub struct AdmissionSlot {
+    /// Whether the request's caller still waits ([`isolate_panics`]).
+    caller: Caller,
     permit: Arc<std::sync::Mutex<Option<tokio::sync::OwnedSemaphorePermit>>>,
     /// The open stream places of [`Admission`] and their number; `None`
     /// outside [`admit`].
@@ -1188,10 +1223,17 @@ pub struct AdmissionSlot {
 impl AdmissionSlot {
     pub fn new(permit: tokio::sync::OwnedSemaphorePermit, admission: &Admission) -> Self {
         Self {
+            caller: Caller::default(),
             permit: Arc::new(std::sync::Mutex::new(Some(permit))),
             open_streams: Some((admission.open_streams.clone(), admission.stream_places)),
             retry_after_seconds: admission.retry_after_seconds,
         }
+    }
+
+    /// The caller of the request this place was taken for; one that never
+    /// leaves outside [`isolate_panics`].
+    pub fn caller(&self) -> Caller {
+        self.caller.clone()
     }
 
     /// The permit, once; `None` after the first call.
@@ -1243,10 +1285,57 @@ impl IntoResponse for StreamsFull {
     }
 }
 
-/// 503 + `Retry-After` once `waiting + 1` requests are in flight.
+/// What a request has, from the moment it takes its queue place, to send its
+/// whole body: the place is taken when the head is read, and a caller that
+/// then sends no body, or a byte at a time, would hold it for as long as it
+/// stays connected. The 30 s of the relay's own stalls
+/// (`local_api::WRITE_STALL`, `FRAME_SILENCE`). The largest body a route
+/// reads, 4 MiB sealed, fits at 1.1 Mbit/s.
+pub const BODY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// The body of a request in the queue: `inner` until `late`, then one
+/// [`BodyLate`], which the extractor that reads it gives its handler as a
+/// rejection. A frame that is ready is given first: a body whole at the
+/// deadline is read.
+struct QueuedBody {
+    inner: axum::body::Body,
+    late: std::pin::Pin<Box<tokio::time::Sleep>>,
+    wait: std::time::Duration,
+}
+
+impl hyper::body::Body for QueuedBody {
+    type Data = axum::body::Bytes;
+    type Error = axum::Error;
+
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<hyper::body::Frame<Self::Data>, Self::Error>>> {
+        use std::future::Future as _;
+        use std::task::Poll;
+        if let Poll::Ready(frame) = std::pin::Pin::new(&mut self.inner).poll_frame(cx) {
+            return Poll::Ready(frame);
+        }
+        if self.late.as_mut().poll(cx).is_ready() {
+            return Poll::Ready(Some(Err(axum::Error::new(BodyLate(self.wait)))));
+        }
+        Poll::Pending
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.inner.is_end_stream()
+    }
+
+    fn size_hint(&self) -> hyper::body::SizeHint {
+        self.inner.size_hint()
+    }
+}
+
+/// 503 + `Retry-After` once `waiting + 1` requests are in flight. A request
+/// let in has [`BODY_TIMEOUT`] from here for its body (`QueuedBody`).
 pub async fn admit(
     State(serving): State<Arc<Serving>>,
-    mut req: axum::extract::Request,
+    req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
     let Some(permit) = serving.admission.try_enter() else {
@@ -1261,7 +1350,17 @@ pub async fn admit(
         .retry_after(u64::from(a.retry_after_seconds))
         .into_response();
     };
-    let slot = AdmissionSlot::new(permit, &serving.admission);
+    let mut slot = AdmissionSlot::new(permit, &serving.admission);
+    let mut req = req.map(|inner| {
+        axum::body::Body::new(QueuedBody {
+            inner,
+            late: Box::pin(tokio::time::sleep(BODY_TIMEOUT)),
+            wait: BODY_TIMEOUT,
+        })
+    });
+    if let Some(caller) = req.extensions().get::<Caller>() {
+        slot.caller = caller.clone();
+    }
     req.extensions_mut().insert(slot.clone());
     let response = next.run(req).await;
     // A request refused before its turn gives its place back here; one that
@@ -1270,15 +1369,99 @@ pub async fn admit(
     response
 }
 
+/// Whether the caller of a request still waits for its answer. The request's
+/// task outlives a caller who hangs up ([`isolate_panics`]): this is how it
+/// learns that nobody reads what it computes.
+#[derive(Clone, Default)]
+pub struct Caller(Arc<AtomicBool>);
+
+impl Caller {
+    /// The connection the request came on is closed, or its answer is no
+    /// longer awaited.
+    pub fn gone(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
+/// A whole answer's reader: it takes no text before the end, and is gone
+/// when its caller is. A generation that asks it stops at its next step.
+impl TokenSink for Caller {
+    fn started(&mut self) -> std::ops::ControlFlow<()> {
+        if self.gone() {
+            std::ops::ControlFlow::Break(())
+        } else {
+            std::ops::ControlFlow::Continue(())
+        }
+    }
+    fn delta(&mut self, _text: &str) -> std::ops::ControlFlow<()> {
+        std::ops::ControlFlow::Continue(())
+    }
+    fn alive(&self) -> bool {
+        !self.gone()
+    }
+}
+
+/// A stream's reader on the attested route. Until the header leaves, the
+/// channel's other end is held by the request's task, which outlives a
+/// caller who hangs up: the channel alone would have the prompt read for a
+/// caller who left in the queue. So the caller is asked too, before the
+/// prompt is read and at every step. Once the header has left the caller is
+/// never gone ([`Awaited`]) and the channel, whose other end is the body,
+/// tells.
+struct UntilTheHeader {
+    sink: crate::stream::ChannelSink,
+    caller: Caller,
+}
+
+impl TokenSink for UntilTheHeader {
+    fn started(&mut self) -> std::ops::ControlFlow<()> {
+        if self.caller.gone() {
+            return std::ops::ControlFlow::Break(());
+        }
+        self.sink.started()
+    }
+    fn delta(&mut self, text: &str) -> std::ops::ControlFlow<()> {
+        self.sink.delta(text)
+    }
+    fn alive(&self) -> bool {
+        !self.caller.gone() && self.sink.alive()
+    }
+}
+
+/// Marks its [`Caller`] gone when dropped before the response came: hyper
+/// drops the future that awaits a request once its connection is closed.
+struct Awaited {
+    caller: Caller,
+    answered: bool,
+}
+
+impl Drop for Awaited {
+    fn drop(&mut self) {
+        if !self.answered {
+            self.caller.0.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
 /// Each request runs in its own task, so a panic anywhere in it is a 500 for
 /// that request. The payload is neither returned nor logged: it may quote the
 /// request. The task also outlives a caller who hangs up, so its queue slot
-/// stays taken until the model is free again.
+/// stays taken until the model is free again; the request's [`Caller`], in
+/// its extensions, tells that task the caller left, and a whole answer's
+/// generation stops there as a stream's does.
 pub async fn isolate_panics(
-    req: axum::extract::Request,
+    mut req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
-    match tokio::spawn(next.run(req)).await {
+    let caller = Caller::default();
+    req.extensions_mut().insert(caller.clone());
+    let mut awaited = Awaited {
+        caller,
+        answered: false,
+    };
+    let joined = tokio::spawn(next.run(req)).await;
+    awaited.answered = true;
+    match joined {
         Ok(response) => response,
         Err(_) => ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, INTERNAL).into_response(),
     }
@@ -1330,11 +1513,113 @@ pub async fn serve_with(
     state: ServerState,
     serving: Serving,
 ) -> std::io::Result<()> {
+    let app = app(state, Arc::new(serving));
+    serve_http(listener, app, HEAD_TIMEOUT, std::future::pending()).await;
+    Ok(())
+}
+
+/// What a connection of a plain-HTTP server has to send a whole request
+/// head, counted from its accept or from the end of the answer before: the
+/// cloud TD's bound and its reasons (`cloud_serve::DEFAULT_HEAD_TIMEOUT`).
+/// hyper arms it on an idle connection too, and a client's idle pool must not
+/// meet the close: long. It bounds what a peer can hold for ever, not how
+/// many connections it opens.
+pub const HEAD_TIMEOUT: std::time::Duration = crate::cloud_serve::DEFAULT_HEAD_TIMEOUT;
+
+/// `axum::serve` with a bound on the wait for a request head: `app` on
+/// `listener`, HTTP/1.1, until `stop` ends; then no new connection, each
+/// open one closed once the answer it is writing is out, and the return once
+/// all are. `axum::serve` gives hyper no timer, and hyper 1.11 then drops
+/// its header timeout in silence: a connection that sent nothing, or a head
+/// without its end, stayed open for as long as its peer did.
+pub async fn serve_http(
+    listener: tokio::net::TcpListener,
+    app: Router,
+    head_timeout: std::time::Duration,
+    stop: impl std::future::Future<Output = ()> + Send + 'static,
+) {
+    let (stopping, stopped) = tokio::sync::watch::channel(());
+    tokio::spawn(async move {
+        stop.await;
+        drop(stopped);
+    });
+    let (all_closed, open) = tokio::sync::watch::channel(());
+    loop {
+        let tcp = tokio::select! {
+            tcp = accepted(&listener) => tcp,
+            () = stopping.closed() => break,
+        };
+        tokio::spawn(serve_connection(
+            tcp,
+            app.clone(),
+            head_timeout,
+            stopping.clone(),
+            open.clone(),
+        ));
+    }
+    drop(open);
+    drop(listener);
+    all_closed.closed().await;
+}
+
+/// The next connection. An error of the connection itself is passed over;
+/// any other (out of descriptors) waits a second, as `axum::serve` does.
+/// Nothing is printed: `axum::serve` printed nothing either.
+async fn accepted(listener: &tokio::net::TcpListener) -> tokio::net::TcpStream {
+    use std::io::ErrorKind::{ConnectionAborted, ConnectionRefused, ConnectionReset};
+    loop {
+        match listener.accept().await {
+            Ok((tcp, _)) => return tcp,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    ConnectionRefused | ConnectionAborted | ConnectionReset
+                ) => {}
+            Err(_) => tokio::time::sleep(std::time::Duration::from_secs(1)).await,
+        }
+    }
+}
+
+/// One connection of [`serve_http`]: requests one after the other, each
+/// head whole within `head_timeout` of the accept or of the answer before,
+/// else the connection is closed. An answer is not timed by it. `stopping`
+/// closed: the answer in flight is the last. `_open` is held to the end.
+pub(crate) async fn serve_connection<I>(
+    io: I,
+    app: Router,
+    head_timeout: std::time::Duration,
+    stopping: tokio::sync::watch::Sender<()>,
+    _open: tokio::sync::watch::Receiver<()>,
+) where
+    I: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let service = hyper_util::service::TowerToHyperService::new(app);
+    let mut http = hyper::server::conn::http1::Builder::new();
+    // Without a timer hyper 1.11 arms no header timeout at all.
+    http.timer(hyper_util::rt::TokioTimer::new())
+        .header_read_timeout(head_timeout);
+    let mut conn = std::pin::pin!(http.serve_connection(hyper_util::rt::TokioIo::new(io), service));
+    let mut stop = std::pin::pin!(stopping.closed());
+    let mut told = false;
+    loop {
+        tokio::select! {
+            // An error is a peer that left or one closed for its silence.
+            _ = conn.as_mut() => break,
+            () = &mut stop, if !told => {
+                told = true;
+                conn.as_mut().graceful_shutdown();
+            }
+        }
+    }
+}
+
+/// The routes [`serve_with`] serves and their layers. Not public: a listener
+/// comes from the gate (`crate::gate::bind`), and only [`serve_with`] takes one.
+pub(crate) fn app(state: ServerState, serving: Arc<Serving>) -> Router {
     let hosts = Arc::new(serving.allowed_hosts.clone());
-    let serving = Arc::new(serving);
-    let admitted = axum::middleware::from_fn_with_state(serving.clone(), admit);
+    let admitted = axum::middleware::from_fn_with_state(serving, admit);
     let listed = listed(&*state.model);
-    let app = Router::new()
+    Router::new()
         .route("/", get(console))
         .route("/v1/chat/completions", post(chat).layer(admitted))
         .route(
@@ -1344,14 +1629,13 @@ pub async fn serve_with(
         .route("/attestation", get(attestation))
         .with_state(Arc::new(state))
         .layer(axum::middleware::from_fn(isolate_panics))
-        .layer(axum::middleware::from_fn_with_state(hosts, check_host));
-    axum::serve(listener, app).await
+        .layer(axum::middleware::from_fn_with_state(hosts, check_host))
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::backend::{Cancelled, Sampling, TokenSink};
+    use crate::backend::{Cancelled, Sampling};
 
     /// A failure means a client cannot tell a finished answer from one the
     /// ceiling cut in the middle of a sentence — or of a program.
@@ -1379,6 +1663,21 @@ pub(crate) mod tests {
             None,
             None,
         ))
+    }
+
+    /// [`live_lease`] at [`crate::padding::Tick::SHORT`], for a test that
+    /// asserts no time, no number of frames and no size of ticks.
+    pub(crate) fn short_tick_lease() -> crate::serving_lease::ServingLease {
+        live_lease().ticking(crate::padding::Tick::SHORT)
+    }
+
+    /// [`Serving::default`] at [`crate::padding::Tick::SHORT`], as
+    /// [`short_tick_lease`]: [`spawn_serving`] and the cloud TD pad at it.
+    pub(crate) fn short_tick() -> Serving {
+        Serving {
+            tick: crate::padding::Tick::SHORT,
+            ..Serving::default()
+        }
     }
     use crate::gate::Gate;
     use crate::keys::KeyBroker;
@@ -1882,7 +2181,7 @@ pub(crate) mod tests {
                     identity,
                     model,
                     max_completion_tokens: 32,
-                    lease: live_lease(),
+                    lease: short_tick_lease(),
                     salt_source: Box::new(|| [3u8; 32]),
                     challenge_source: challenge_fixture(),
                 },
@@ -1936,7 +2235,7 @@ pub(crate) mod tests {
                     identity,
                     model,
                     max_completion_tokens: 32,
-                    lease: live_lease(),
+                    lease: short_tick_lease(),
                     salt_source: Box::new(|| [3u8; 32]),
                     challenge_source: challenge_fixture(),
                 },
@@ -2108,7 +2407,7 @@ pub(crate) mod tests {
                     identity,
                     model,
                     max_completion_tokens: DEFAULT_MAX_COMPLETION_TOKENS,
-                    lease: live_lease(),
+                    lease: short_tick_lease(),
                     salt_source: Box::new(|| [3u8; 32]),
                     challenge_source: challenge_fixture(),
                 },
@@ -2166,7 +2465,7 @@ pub(crate) mod tests {
             identity,
             model,
             max_completion_tokens: DEFAULT_MAX_COMPLETION_TOKENS,
-            lease: live_lease(),
+            lease: short_tick_lease(),
             salt_source: Box::new(|| [3u8; 32]),
             challenge_source: challenge_fixture(),
         };
@@ -2294,7 +2593,7 @@ pub(crate) mod tests {
                     identity,
                     model,
                     max_completion_tokens: 8,
-                    lease: live_lease(),
+                    lease: live_lease().ticking(serving.tick),
                     salt_source: Box::new(|| [3u8; 32]),
                     challenge_source: challenge_fixture(),
                 },
@@ -2336,7 +2635,7 @@ pub(crate) mod tests {
             model,
             Serving {
                 admission: Admission::new(N - 1),
-                ..Serving::default()
+                ..short_tick()
             },
         )
         .await;
@@ -2416,7 +2715,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn every_unhonoured_openai_parameter_is_refused_by_name() {
         let ran = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let addr = spawn_serving(Box::new(EchoesItsBudget(ran.clone())), Serving::default()).await;
+        let addr = spawn_serving(Box::new(EchoesItsBudget(ran.clone())), short_tick()).await;
         let client = reqwest::Client::new();
         let send = |body: serde_json::Value| {
             client
@@ -2647,7 +2946,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn the_receipt_signs_the_seed_and_the_schema_and_an_edit_breaks_it() {
         use serde_json::json;
-        let addr = spawn_serving(Box::new(WritesJson { lies: false }), Serving::default()).await;
+        let addr = spawn_serving(Box::new(WritesJson { lies: false }), short_tick()).await;
         let mut body = json_format(ok_schema());
         body["messages"] = json!([{"role": "user", "content": "hi"}]);
         body["temperature"] = json!(0.7);
@@ -2725,7 +3024,7 @@ pub(crate) mod tests {
             identity: SessionIdentity::generate([7u8; 32], [9u8; 32]),
             model: fixture_model(),
             max_completion_tokens: 4,
-            lease: live_lease(),
+            lease: short_tick_lease(),
             salt_source: Box::new(move || {
                 [next.fetch_add(1, std::sync::atomic::Ordering::Relaxed); 32]
             }),
@@ -2886,7 +3185,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn a_conversation_is_refused_by_name_and_its_handle_never_quoted() {
         use serde_json::json;
-        let addr = spawn_serving(Box::new(WritesJson { lies: false }), Serving::default()).await;
+        let addr = spawn_serving(Box::new(WritesJson { lies: false }), short_tick()).await;
         let messages = json!([{"role": "user", "content": "hi"}]);
         let (status, v) = post_json(
             addr,
@@ -2932,7 +3231,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn a_completion_outside_its_schema_is_never_signed() {
         use serde_json::json;
-        let addr = spawn_serving(Box::new(WritesJson { lies: true }), Serving::default()).await;
+        let addr = spawn_serving(Box::new(WritesJson { lies: true }), short_tick()).await;
         let mut body = json_format(ok_schema());
         body["messages"] = json!([{"role": "user", "content": "hi"}]);
         let (status, v) = post_json(addr, &body).await;
@@ -2948,7 +3247,7 @@ pub(crate) mod tests {
         assert!(text.contains("error"), "{text}");
 
         let ran = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let addr = spawn_serving(Box::new(EchoesItsBudget(ran.clone())), Serving::default()).await;
+        let addr = spawn_serving(Box::new(EchoesItsBudget(ran.clone())), short_tick()).await;
         body.as_object_mut().unwrap().remove("stream");
         let (status, v) = post_json(addr, &body).await;
         assert_eq!(status, 400, "{v}");
@@ -3024,7 +3323,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn stream_options_takes_include_usage_with_stream_only() {
         use serde_json::json;
-        let addr = spawn_serving(Box::new(Pieces(&["a", "b"])), Serving::default()).await;
+        let addr = spawn_serving(Box::new(Pieces(&["a", "b"])), short_tick()).await;
         for include_usage in [false, true] {
             let read = read_stream(
                 addr,
@@ -3137,7 +3436,7 @@ pub(crate) mod tests {
     /// route; the loopback is served.
     #[tokio::test]
     async fn a_rebound_host_is_421_on_every_route_and_the_loopback_is_served() {
-        let addr = spawn_serving(Box::new(Parrot), Serving::default()).await;
+        let addr = spawn_serving(Box::new(Parrot), short_tick()).await;
         let client = reqwest::Client::new();
         let chat = serde_json::json!({"messages": [{"role": "user", "content": "hi"}]});
         for host in ["evil.example", "evil.example:8477", "127.0.0.1.nip.io"] {
@@ -3271,7 +3570,7 @@ pub(crate) mod tests {
             withhold_panic_payloads();
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
-                let addr = spawn_serving(Box::new(Parrot), Serving::default()).await;
+                let addr = spawn_serving(Box::new(Parrot), short_tick()).await;
                 canary_traffic(addr).await
             });
             eprintln!("child: traffic sent");
@@ -3335,7 +3634,7 @@ pub(crate) mod tests {
                     identity,
                     model,
                     max_completion_tokens: DEFAULT_MAX_COMPLETION_TOKENS,
-                    lease: live_lease(),
+                    lease: short_tick_lease(),
                     salt_source: Box::new(|| [3u8; 32]),
                     challenge_source: challenge_fixture(),
                 },
@@ -3487,8 +3786,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn max_completion_tokens_is_honoured_as_max_tokens() {
         let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let addr =
-            spawn_serving(Box::new(EchoesItsBudget(asked.clone())), Serving::default()).await;
+        let addr = spawn_serving(Box::new(EchoesItsBudget(asked.clone())), short_tick()).await;
         let hi = serde_json::json!([{"role": "user", "content": "hi"}]);
         for (extra, want) in [
             (serde_json::json!({"max_completion_tokens": 5}), 5),
@@ -3536,7 +3834,7 @@ pub(crate) mod tests {
     /// in bytes, not characters, since 2026-10-19; a refusal never quotes it.
     #[tokio::test]
     async fn a_stop_sequence_ends_the_answer_before_it_and_the_receipt_covers_the_cut() {
-        let addr = spawn_serving(Box::new(Says("alpha beta STOP gamma")), Serving::default()).await;
+        let addr = spawn_serving(Box::new(Says("alpha beta STOP gamma")), short_tick()).await;
         let ask = |stop: serde_json::Value| {
             serde_json::json!({"messages": [{"role": "user", "content": "hi"}],
                 "max_completion_tokens": 8, "stop": stop})
@@ -3618,7 +3916,7 @@ pub(crate) mod tests {
     /// Refused with a 400 until 2026-10-18; a failure means it is again, or is ignored.
     #[tokio::test]
     async fn temperature_samples_with_the_seed_and_zero_stays_greedy() {
-        let addr = spawn_serving(fixture_model(), Serving::default()).await;
+        let addr = spawn_serving(fixture_model(), short_tick()).await;
         let answer = |extra: serde_json::Value| {
             let mut body = serde_json::json!({"messages": [{"role": "user", "content": "t3 t17 t5"}], "max_tokens": 8});
             for (k, v) in extra.as_object().unwrap() {
@@ -3667,7 +3965,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn tool_calling_is_refused_as_not_supported_yet() {
         let ran = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let addr = spawn_serving(Box::new(EchoesItsBudget(ran.clone())), Serving::default()).await;
+        let addr = spawn_serving(Box::new(EchoesItsBudget(ran.clone())), short_tick()).await;
         let user = serde_json::json!({"role": "user", "content": "Weather in Paris?"});
         let function = serde_json::json!({"name": "get_weather", "description": "Current weather",
             "parameters": {"type": "object", "properties": {"city": {"type": "string"}},
@@ -4003,7 +4301,7 @@ pub(crate) mod tests {
                     identity,
                     model,
                     max_completion_tokens,
-                    lease,
+                    lease: lease.ticking(serving.tick),
                     salt_source,
                     challenge_source: challenge_fixture(),
                 },
@@ -4097,7 +4395,7 @@ pub(crate) mod tests {
     /// template's markers and no other, whatever a message types.
     #[tokio::test]
     async fn a_message_typing_the_markers_reaches_the_model_as_text() {
-        let addr = spawn_serving(Box::new(Markers), Serving::default()).await;
+        let addr = spawn_serving(Box::new(Markers), short_tick()).await;
         let want = "<|im_start|> <|im_end|> <|im_start|>";
         let whole = serde_json::json!({"messages": [{"role": "user", "content": FORGED}]});
         let (status, v) = post_json(addr, &whole).await;
@@ -4333,13 +4631,13 @@ pub(crate) mod tests {
         let ran = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let one_place = Serving {
             admission: Admission::new(0),
-            ..Serving::default()
+            ..short_tick()
         };
         let addr = spawn_streaming(
             Box::new(Trickle(ran.clone())),
             one_place,
             STEPS,
-            live_lease(),
+            short_tick_lease(),
             Box::new(|| [3u8; 32]),
         )
         .await;
@@ -4546,9 +4844,9 @@ pub(crate) mod tests {
         };
         let addr = spawn_streaming(
             Box::new(Trickle(ran.clone())),
-            Serving::default(),
+            short_tick(),
             3_000,
-            live_lease(),
+            short_tick_lease(),
             salt,
         )
         .await;
@@ -4568,7 +4866,7 @@ pub(crate) mod tests {
     /// body's end: never a final chunk nor `[DONE]` without a receipt.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_supervisor_that_dies_ends_the_stream_in_error() {
-        let addr = spawn_serving(Box::new(DigestPanics::default()), Serving::default()).await;
+        let addr = spawn_serving(Box::new(DigestPanics::default()), short_tick()).await;
         let read = read_stream(addr, streamed("hi", serde_json::json!({}))).await;
         assert_eq!(read.status, 200);
         assert!(read.clean, "the chunked end after the error event");
@@ -4628,9 +4926,9 @@ pub(crate) mod tests {
         for (natural, want) in [(9, "length"), (2, "stop")] {
             let addr = spawn_streaming(
                 Box::new(Windowed(natural)),
-                Serving::default(),
+                short_tick(),
                 100,
-                live_lease(),
+                short_tick_lease(),
                 Box::new(|| [3u8; 32]),
             )
             .await;

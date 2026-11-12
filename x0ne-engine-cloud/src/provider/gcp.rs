@@ -17,6 +17,10 @@ use crate::http::{Api, ApiError, Body};
 use crate::quote::{self, PriceSource, Quote};
 use crate::{Failure, Knobs, LABEL_KEY, NAME_PREFIX};
 
+/// How many times a VM's delete, or the read that confirms it, is asked
+/// while its failure is transient.
+const DELETE_TRIES: u32 = 4;
+
 /// Regional quota of spot H100 GPUs (Compute API metric name). regions.get did not
 /// list it in us-east5, europe-west4 nor us-central1 on 2026-10-17: Cloud Quotas did.
 pub const H100_SPOT_QUOTA: &str = "PREEMPTIBLE_NVIDIA_H100_GPUS";
@@ -406,6 +410,7 @@ impl Gcp {
         };
         let deadline = Instant::now() + timeout;
         let mut cur = op.clone();
+        let mut unread = 0;
         loop {
             if cur["status"].as_str() == Some("DONE") {
                 if let Some(errs) = cur["error"]["errors"].as_array() {
@@ -430,7 +435,16 @@ impl Gcp {
                 });
             }
             tokio::time::sleep(self.knobs.boot_poll.min(Duration::from_secs(2))).await;
-            cur = self.api.get_json(url.clone()).await?;
+            // One read that fails in passing does not fail what the operation
+            // does (an import takes minutes): it is read again.
+            match self.api.get_json(url.clone()).await {
+                Ok(v) => {
+                    cur = v;
+                    unread = 0;
+                }
+                Err(e) if e.transient() && unread + 1 < DELETE_TRIES => unread += 1,
+                Err(e) => return Err(e),
+            }
         }
     }
 
@@ -578,32 +592,56 @@ impl Gcp {
         quote::breakdown_from_skus(&skus, region)
     }
 
-    async fn delete_url(&self, url: Url, what: &str) -> Result<(), String> {
-        match self.api.delete(url).await {
-            Ok(op) => self
-                .wait_op(&op, self.knobs.op_timeout)
-                .await
-                .map_err(|e| format!("{what}: {e}")),
-            Err(e) if e.not_found() => Ok(()),
-            Err(e) => Err(format!("{what}: {e}")),
+    /// `call`, asked again after a pause while its failure is transient
+    /// ([`ApiError::transient`]): at most [`DELETE_TRIES`] times, and not past
+    /// `deadline`. For the calls that delete a resource and confirm it, all idempotent.
+    async fn retried<T, F, Fut>(&self, deadline: Instant, mut call: F) -> Result<T, ApiError>
+    where
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = Result<T, ApiError>>,
+    {
+        let mut tries = 1;
+        loop {
+            match call().await {
+                Err(e) if e.transient() && tries < DELETE_TRIES && Instant::now() < deadline => {
+                    tries += 1;
+                    tokio::time::sleep(self.knobs.settle).await;
+                }
+                r => return r,
+            }
         }
     }
 
-    /// DELETE, then confirm absence. When the insert may still be landing,
-    /// absence is re-checked after a pause and a reappearing VM is deleted again.
-    async fn delete_instance(&self, i: &Instance, pending: bool) -> Result<(), String> {
-        let url = self.instance_url(i);
-        let needed = if pending { 3 } else { 1 };
+    /// DELETE `url`, then confirm absence by reading it back: `needed` times
+    /// in a row, with a pause, when an insert may still be landing (a VM that
+    /// reappears is deleted again). A transient failure of either call is
+    /// asked again ([`Self::retried`]), and a resource still read after a
+    /// delete that answered "done" or 404 is deleted again: one lost or wrong
+    /// answer must not leave it billed. `what` names it in the error.
+    async fn delete_confirmed(&self, url: Url, what: &str, needed: u32) -> Result<(), String> {
         let deadline = Instant::now() + self.knobs.op_timeout * 2;
         loop {
-            self.delete_url(url.clone(), &format!("VM {}", i.name))
-                .await?;
+            match self
+                .retried(deadline, || self.api.delete(url.clone()))
+                .await
+            {
+                Ok(op) => {
+                    self.wait_op(&op, self.knobs.op_timeout)
+                        .await
+                        .map_err(|e| format!("{what}: {e}"))?;
+                }
+                Err(e) if e.not_found() => {}
+                Err(e) => return Err(format!("{what}: {e}")),
+            }
             let mut absent = 0;
             loop {
                 if Instant::now() > deadline {
-                    return Err(format!("VM {}: still present after the delete", i.name));
+                    return Err(format!("{what}: still present after the delete"));
                 }
-                match self.api.get_json(url.clone()).await {
+                match self
+                    .retried(deadline, || self.api.get_json(url.clone()))
+                    .await
+                {
                     Err(e) if e.not_found() => {
                         absent += 1;
                         if absent >= needed {
@@ -611,42 +649,83 @@ impl Gcp {
                         }
                         tokio::time::sleep(self.knobs.settle).await;
                     }
-                    Err(e) => return Err(format!("VM {}: {e}", i.name)),
+                    Err(e) => return Err(format!("{what}: {e}")),
                     Ok(_) => break,
                 }
             }
+            tokio::time::sleep(self.knobs.settle).await;
         }
     }
 
+    async fn delete_url(&self, url: Url, what: &str) -> Result<(), String> {
+        self.delete_confirmed(url, what, 1).await
+    }
+
+    async fn delete_instance(&self, i: &Instance, pending: bool) -> Result<(), String> {
+        let needed = if pending { 3 } else { 1 };
+        self.delete_confirmed(self.instance_url(i), &format!("VM {}", i.name), needed)
+            .await
+    }
+
+    /// The bucket's objects, then the bucket, then its absence read back. As
+    /// [`Self::delete_confirmed`]: transient failures are asked again, and a
+    /// bucket still read after its delete is deleted again.
     async fn delete_bucket(&self, bucket: &str) -> Result<(), String> {
+        let deadline = Instant::now() + self.knobs.op_timeout * 2;
+        let url = self.storage(&format!("b/{bucket}"));
         let mut list = self.storage(&format!("b/{bucket}/o"));
         list.query_pairs_mut().append_pair("versions", "true");
-        let objects = match self.list_pages(list, "items").await {
-            Ok(o) => o,
-            Err(e) if e.not_found() => return Ok(()),
-            Err(e) => return Err(format!("bucket {bucket}: {e}")),
-        };
-        for o in objects {
-            let Some(name) = o["name"].as_str() else {
-                continue;
+        loop {
+            let objects = match self
+                .retried(deadline, || self.list_pages(list.clone(), "items"))
+                .await
+            {
+                Ok(o) => o,
+                // No such bucket, if that is true: read back below.
+                Err(e) if e.not_found() => Vec::new(),
+                Err(e) => return Err(format!("bucket {bucket}: {e}")),
             };
-            let mut url = self.storage(&format!("b/{bucket}/o"));
-            url.path_segments_mut()
-                .map_err(|_| "bad storage URL".to_string())?
-                .push(name);
-            if let Some(g) = o["generation"].as_str() {
-                url.query_pairs_mut().append_pair("generation", g);
+            for o in objects {
+                let Some(name) = o["name"].as_str() else {
+                    continue;
+                };
+                let mut object = self.storage(&format!("b/{bucket}/o"));
+                object
+                    .path_segments_mut()
+                    .map_err(|()| "bad storage URL".to_string())?
+                    .push(name);
+                if let Some(g) = o["generation"].as_str() {
+                    object.query_pairs_mut().append_pair("generation", g);
+                }
+                match self
+                    .retried(deadline, || self.api.delete(object.clone()))
+                    .await
+                {
+                    Ok(_) => {}
+                    Err(e) if e.not_found() => {}
+                    Err(e) => return Err(format!("object {name} in {bucket}: {e}")),
+                }
             }
-            match self.api.delete(url).await {
+            match self
+                .retried(deadline, || self.api.delete(url.clone()))
+                .await
+            {
                 Ok(_) => {}
                 Err(e) if e.not_found() => {}
-                Err(e) => return Err(format!("object {name} in {bucket}: {e}")),
+                Err(e) => return Err(format!("bucket {bucket}: {e}")),
             }
-        }
-        match self.api.delete(self.storage(&format!("b/{bucket}"))).await {
-            Ok(_) => Ok(()),
-            Err(e) if e.not_found() => Ok(()),
-            Err(e) => Err(format!("bucket {bucket}: {e}")),
+            match self
+                .retried(deadline, || self.api.get_json(url.clone()))
+                .await
+            {
+                Err(e) if e.not_found() => return Ok(()),
+                Err(e) => return Err(format!("bucket {bucket}: {e}")),
+                Ok(_) => {}
+            }
+            if Instant::now() > deadline {
+                return Err(format!("bucket {bucket}: still present after the delete"));
+            }
+            tokio::time::sleep(self.knobs.settle).await;
         }
     }
 
@@ -724,6 +803,26 @@ impl Gcp {
             }
         }
         Ok(())
+    }
+
+    /// What to say of image `name` after an import that failed once its
+    /// creation was asked: nothing when it does not exist, else that it does
+    /// (or may), with the command that deletes it.
+    async fn image_left(&self, name: &str) -> String {
+        let delete = format!(
+            "gcloud compute images delete {name} --project {}",
+            self.project
+        );
+        match self.image(name).await {
+            Ok(img) if img.status == "MISSING" => String::new(),
+            Ok(img) => format!(
+                "; image {name} exists all the same ({}): keep it, or delete it with {delete}",
+                img.status
+            ),
+            Err(_) => format!(
+                "; image {name} may exist all the same (it could not be read): to delete it, {delete}"
+            ),
+        }
     }
 }
 
@@ -825,9 +924,12 @@ impl Provider for Gcp {
                 let shape = Shape {
                     vcpus: mt["guestCpus"].as_u64().unwrap_or(0) as u32,
                     memory_gib: mt["memoryMb"].as_f64().unwrap_or(0.0) / 1024.0,
+                    // Never fewer than the one GPU `instance_body` asks for: a
+                    // machine type read without its accelerators is not free of them.
                     gpus: mt["accelerators"][0]["guestAcceleratorCount"]
                         .as_u64()
-                        .unwrap_or(1) as u32,
+                        .unwrap_or(1)
+                        .max(1) as u32,
                 };
                 let needs = [
                     (SPOT_CPUS_QUOTA, Some(f64::from(shape.vcpus))),
@@ -1301,7 +1403,14 @@ impl Provider for Gcp {
         Box::pin(async move {
             let bucket = r.bucket.clone();
             let object = format!("{}.tar.gz", r.image);
-            self.api
+            let not_deleted = |c: String| {
+                format!(
+                    "transit bucket not deleted ({c}): gcloud storage rm -r gs://{bucket} --project {}",
+                    self.project
+                )
+            };
+            if let Err(e) = self
+                .api
                 .post_json(
                     {
                         let mut u = self.storage("b");
@@ -1311,7 +1420,19 @@ impl Provider for Gcp {
                     bucket_body(&bucket, &r.region),
                 )
                 .await
-                .map_err(|e| api_fail("creating the transit bucket", e))?;
+            {
+                // Refused (4xx): no bucket. Anything else, a lost answer
+                // among them, may have created it: it is deleted, or said.
+                let refused = matches!(e.status, Some(400..=499)) && !e.transient();
+                if !refused {
+                    if let Err(c) = self.delete_bucket(&bucket).await {
+                        return Err(Failure::DeleteUnconfirmed(not_deleted(c)));
+                    }
+                }
+                return Err(api_fail("creating the transit bucket", e));
+            }
+            // Set once the image creation is asked: from there on the image may exist.
+            let asked = std::cell::Cell::new(false);
             let result = async {
                 sayln!(
                     "  uploading {} to transit bucket {bucket} ...",
@@ -1324,6 +1445,7 @@ impl Provider for Gcp {
                     "  creating image {} (Google reads the upload; minutes) ...",
                     r.image
                 );
+                asked.set(true);
                 let op = self
                     .api
                     .post_json(
@@ -1339,14 +1461,18 @@ impl Provider for Gcp {
             }
             .await;
             let cleanup = self.delete_bucket(&bucket).await;
-            match (result, cleanup) {
-                (Ok(img), Ok(())) => Ok(img),
-                (Err(e), Ok(())) => Err(e),
-                (Ok(_) | Err(_), Err(c)) => Err(Failure::DeleteUnconfirmed(format!(
-                    "transit bucket not deleted ({c}): gcloud storage rm -r gs://{bucket} --project {}",
-                    self.project
-                ))),
+            let failure = match (result, cleanup) {
+                (Ok(img), Ok(())) => return Ok(img),
+                (_, Err(c)) => Failure::DeleteUnconfirmed(not_deleted(c)),
+                (Err(e), Ok(())) => e,
+            };
+            if !asked.get() {
+                return Err(failure);
             }
+            // The import is reported as failed: an image it made all the same
+            // (its answer was lost, or only the bucket stays) is not left unsaid.
+            let image = self.image_left(&r.image).await;
+            Err(failure.map_message(|m| format!("{m}{image}")))
         })
     }
 

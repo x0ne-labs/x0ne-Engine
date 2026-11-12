@@ -11,9 +11,20 @@
 #         ci/inside.sh on it and $CI_CACHE/v2/target in --network=none, under
 #         CI_CGROUP_PARENT when set. Writes out/ci/<sha>.json (<sha>+dirty.json for a worktree
 #         with changes), logs the verdict to the journal, exits 0 (green) 1 (red) 2 (setup).
+#         CI_VERDICT_NAME=<name> (lowercase letters, digits, dashes) names a run that is not
+#         make ci: its verdict is out/ci/<sha>.<name>.json and latest.<name>.json, never the
+#         <sha>.json and latest.json of make ci, which make deb and ci/ci.sh status read.
+#         CI_STEPS naming only steps that build nothing (fmt ci-sh features deny gitleaks)
+#         takes no build lock and mounts no target: the staged tree is the source, removed after.
+#         A full run that is green leaves its verdict in $CI_CACHE/verdicts/<tree>.json; a later
+#         full run of the same tree (the same files: a commit of what CI_WORKTREE=1 tested, a
+#         merge that changed nothing) under the same image, within CI_REUSE_MAX_AGE, takes that
+#         verdict without the lock or a container when CI_REUSE=1: "reused_from" names the
+#         run, each step carries "reused": true. Never with CI_STEPS, CI_RANGE or
+#         CI_ALL_FEATURES. Off by default: every make ci runs.
 # image   build the CI image (ci/Containerfile); tagged by the file's hash.
 # refresh force the vendor and advisory-db refresh.
-# status  print the last result.
+# status  print the last result (CI_VERDICT_NAME=<name>: the last of that name).
 # deb     release build of HEAD in the CI image (ci/inside-deb.sh), in a new and empty
 #         target directory under DEB_TARGET, removed after, without sccache: nothing make
 #         ci or run-fixtures left in their caches reaches the package. Then the
@@ -47,7 +58,9 @@
 # CI_MIN_DISK_GB (150, free on / and on the filesystems of CI_CACHE, DEB_TARGET
 # and DEB_STAGING), CI_WAIT_MAX (3600 s for the build lock), CI_STEPS (see ci/inside.sh),
 # CI_RANGE (<from>..<to>, the merged commits scanned by gitleaks),
-# CI_WORKTREE=1 (test the working tree instead of HEAD),
+# CI_WORKTREE=1 (test the working tree instead of HEAD), CI_VERDICT_NAME (see run),
+# CI_REUSE (1: a tree already green takes its verdict, see run; default 0: always run),
+# CI_REUSE_MAX_AGE (86400 s, the age past which the advisory database is fetched again),
 # CI_LOCK ($CI_CACHE/build.lock), CI_TARGET_MAX_GB (40: past it, v2/target
 # is emptied), CI_DEBUGINFO (debug info of the dev and test profiles, line-tables-only),
 # CI_MEMORY (--memory of every container: build, vendoring, advisory, packaging, diffoscope,
@@ -112,6 +125,11 @@ IMG=localhost/x0ne-engine-ci:$(sha256sum "$CI_DIR/Containerfile" | cut -c1-12)
 SCCACHE_BIN=${SCCACHE_BIN:-$(command -v sccache || true)}
 SCCACHE_DISK=${SCCACHE_DISK:-$CI_CACHE/sccache}
 OUT=$REPO/out/ci
+# The verdict of a named run (CI_VERDICT_NAME, see run) beside make ci's, never in its place.
+VNAME=${CI_VERDICT_NAME:-}
+[ -z "$VNAME" ] || [[ $VNAME =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "CI_VERDICT_NAME=$VNAME: lowercase letters, digits and dashes only"
+VSUF=${VNAME:+.$VNAME}
+LATEST=latest$VSUF.json
 X0NE_OS=${X0NE_OS:-}
 DEB_STAGING=${DEB_STAGING:-$CI_CACHE/staging}
 # The release never builds in a target or sccache that make ci or run-fixtures write: a build.rs,
@@ -278,6 +296,35 @@ json_result() {
        failed: ($s | map(select(.status != "ok") | .name)), steps: $s}'
 }
 
+# full_run: no setting narrows or widens what the run checks.
+full_run() { [ -z "${CI_STEPS:-}" ] && [ -z "${CI_RANGE:-}" ] && [ -z "${CI_ALL_FEATURES:-}" ]; }
+
+# The steps of ci/inside.sh that build nothing: no target, so no build lock.
+UNBUILT_STEPS="fmt ci-sh features deny gitleaks"
+# unbuilt_only: CI_STEPS names only such steps.
+unbuilt_only() {
+  local s
+  [ -n "${CI_STEPS:-}" ] || return 1
+  for s in $CI_STEPS; do case " $UNBUILT_STEPS " in *" $s "*) ;; *) return 1 ;; esac; done
+}
+
+# reuse_verdict <tree> <sha> <branch> <dirty> <id>: when this tree has a green full verdict under
+# this image, younger than CI_REUSE_MAX_AGE, writes it as the verdict of <id> and returns 0.
+reuse_verdict() {
+  local tree=$1 sha=$2 branch=$3 dirty=$4 id=$5 v=$CI_CACHE/verdicts/$1.json
+  [ "${CI_REUSE:-0}" = 1 ] && full_run && [ -s "$v" ] || return 1
+  jq -e --arg tree "$tree" --arg image "$IMG" --argjson now "$(date +%s)" --argjson max "${CI_REUSE_MAX_AGE:-86400}" '
+    .status == "green" and .tree == $tree and .image == $image and (.failed | length) == 0
+    and (.reused_from == null) and ($now - (.ended | sub("\\.[0-9]+"; "") | sub("(?<s>[+-][0-9]{2}):(?<m>[0-9]{2})$"; "\(.s)\(.m)") | strptime("%Y-%m-%dT%H:%M:%S%z") | mktime) <= $max)' "$v" > /dev/null 2>&1 || return 1
+  jq --arg sha "$sha" --arg branch "$branch" --arg dirty "$dirty" --arg now "$(date -Is)" --arg file "$v" \
+     --arg source "$([ "${CI_WORKTREE:-0}" = 1 ] && echo worktree || echo commit)" '
+    {sha: .sha, short: .short, ended: .ended, log_dir: .log_dir, verdict: $file} as $from
+    | . + {sha: $sha, short: ($sha[0:7] + (if $dirty == "1" then "+dirty" else "" end)), dirty: ($dirty == "1"),
+           source: $source, branch: $branch, started: $now, ended: $now, duration_s: 0, lock_wait_s: 0, unit: "",
+           reused_from: $from, steps: (.steps | map(. + {reused: true}))}' "$v" > "$OUT/$id.json.tmp" || return 1
+  mv "$OUT/$id.json.tmp" "$OUT/$id.json"; ln -sfn "$id.json" "$OUT/$LATEST"
+}
+
 notify() {
   local status=$1 short=$2 dur=$3 failed=$4
   logger -t engine-ci "$status $short ${dur}s${failed:+ failed: $failed}" || true
@@ -296,24 +343,39 @@ run() {
   if [ "${CI_WORKTREE:-0}" = 1 ] && ! stage_is "$sha"; then dirty=1; fi
   local id=$sha short=${sha:0:7}
   [ "$dirty" = 1 ] && { id=$sha+dirty; short=$short+dirty; }
+  id=$id$VSUF
   local rundir=$CI_CACHE/logs/$short-$(date +%Y%m%d-%H%M%S)
   mkdir -p "$rundir"
   refresh "$STAGE" 0
   local tree; tree=$(tree_id "$STAGE")
   if [ -n "${CI_RANGE:-}" ]; then git -C "$REPO" log -p --format=fuller "$CI_RANGE" > "$rundir/range.patch" || die "bad CI_RANGE $CI_RANGE"; fi
-  local sc=()
+  if reuse_verdict "$tree" "$sha" "$branch" "$dirty" "$id"; then
+    rm -rf "$STAGE"; rmdir "$rundir" 2> /dev/null || true
+    log "green $short reused: tree $tree was green as $(jq -r '.reused_from | .short + " at " + .ended' "$OUT/$id.json"), same image (without CI_REUSE=1 it runs again); $OUT/$id.json"
+    notify green "$short" 0 ""
+    return 0
+  fi
+  local sc=() src=$CI_SRC tgt
   if [ -x "$SCCACHE_BIN" ] && [ -d "$SCCACHE_DISK" ]; then sc=(-v "$(readlink -f "$SCCACHE_BIN")":/usr/local/bin/sccache:ro -v "$SCCACHE_DISK":/sccache); fi
-  lock_build
-  gc_target
-  sync_src "$STAGE" "$CI_SRC"; rm -rf "$STAGE"
+  tgt=(-v "$CI_TARGET":/target)
+  if unbuilt_only; then
+    # Nothing is built: the staged copy is the source, no target is mounted, the lock is not
+    # taken (CI_SRC and CI_TARGET are written under it only). STAGE is removed on exit.
+    LOCK_WAIT=0; src=$STAGE; tgt=(); sc=()
+    log "steps that build nothing ($CI_STEPS): no build lock, no shared target"
+  else
+    lock_build
+    gc_target
+    sync_src "$STAGE" "$CI_SRC"; rm -rf "$STAGE"
+  fi
   started=$(date -Is); t0=$SECONDS
   log "run $short on $branch, tree $tree, image $IMG, jobs $CI_JOBS, logs $rundir"
   set +e
   # keep-id: tests/process_hardening.rs needs an ordinary user (root passes every check).
   $NICE $BUILD_RUN --userns=keep-id \
     --name "engine-ci-${sha:0:7}-$$" \
-    -v "$CI_SRC":/src:ro -v "$VENDOR":/vendor:ro -v "$DB":/advisory-db:ro \
-    -v "$CI_TARGET":/target -v "$rundir":/out -v "$CI_DIR":/ci:ro "${sc[@]}" \
+    -v "$src":/src:ro -v "$VENDOR":/vendor:ro -v "$DB":/advisory-db:ro \
+    "${tgt[@]}" -v "$rundir":/out -v "$CI_DIR":/ci:ro "${sc[@]}" \
     -e CARGO_PROFILE_DEV_DEBUG="$CI_DEBUGINFO" \
     -e CARGO_BUILD_JOBS="$CI_JOBS" -e CI_STEPS="${CI_STEPS:-}" -e CI_ALL_FEATURES="${CI_ALL_FEATURES:-}" \
     -e CI_LANES="$CI_LANES" \
@@ -325,7 +387,11 @@ run() {
   [ $rc -eq 0 ] && status=green
   [ -s "$rundir/steps.tsv" ] || { printf 'container\tfail\t%d\t%d\n' "$dur" "$rc" > "$rundir/steps.tsv"; }
   json_result "$status" "$sha" "$branch" "$started" "$(date -Is)" "$dur" "$rundir/steps.tsv" "$rundir" "$dirty" "$tree" "$LOCK_WAIT" > "$OUT/$id.json.tmp"
-  mv "$OUT/$id.json.tmp" "$OUT/$id.json"; ln -sfn "$id.json" "$OUT/latest.json"
+  mv "$OUT/$id.json.tmp" "$OUT/$id.json"; ln -sfn "$id.json" "$OUT/$LATEST"
+  # The verdict of this tree, for a later run of the same files (reuse_verdict).
+  if [ "$status" = green ] && full_run; then
+    mkdir -p "$CI_CACHE/verdicts"; cp "$OUT/$id.json" "$CI_CACHE/verdicts/$tree.json.tmp" && mv "$CI_CACHE/verdicts/$tree.json.tmp" "$CI_CACHE/verdicts/$tree.json"
+  fi
   local failed; failed=$(jq -r '.failed | join(", ")' "$OUT/$id.json")
   log "$status $short in ${dur}s, lock wait ${LOCK_WAIT}s${failed:+ (failed: $failed)}; $OUT/$id.json"
   notify "$status" "$short" "$dur" "$failed"
@@ -600,7 +666,7 @@ case $cmd in
   run)     run ;;
   image)   image ;;
   refresh) image; export_src "$(git -C "$REPO" rev-parse HEAD)"; refresh "$SRC" 1 ;;
-  status)  [ -e "$OUT/latest.json" ] && jq '{status, short, dirty, branch, duration_s, lock_wait_s, failed, ended}' "$OUT/latest.json" || die "no result yet" ;;
+  status)  [ -e "$OUT/$LATEST" ] && jq '{status, short, dirty, branch, duration_s, lock_wait_s, failed, ended}' "$OUT/$LATEST" || die "no result yet${VNAME:+ named $VNAME}" ;;
   deb)       deb 0 ;;
   deb-repro) deb 1 ;;
   deb-check) deb_check ;;

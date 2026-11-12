@@ -20,7 +20,7 @@ use crate::model_spec::ModelSpec;
 
 /// The fingerprint `x0ne-core/PROVENANCE.md` gives the copy of Core's files.
 pub const CORE_COPY_SHA256: &str =
-    "43c553fb05b888ddf5e42f522a0ecc35c0f427685000ba5c8ae14992fa673012";
+    "10d4c8ea7890870c4239ed9981f367265458e63433ae8c43e15e98b035fafa8b";
 
 /// `config.json` for Core's strict reader: a Qwen3 dense config, read first by
 /// Engine's parser; `rope_theta` nested under `rope_parameters` (recent
@@ -106,6 +106,8 @@ mod linked {
         pub(crate) engine: Mutex<Engine>,
         pub(crate) tokenizer: Tokenizer,
         pub(crate) eos_ids: Vec<u32>,
+        /// The vocabulary as bytes, for `json_schema` masks: read once.
+        token_table: stepped::TableCache,
         digest_hex: String,
         pub(crate) context_tokens: usize,
         facts: EngineFacts,
@@ -136,10 +138,12 @@ mod linked {
                 Tokenizer::from_bytes(&artifacts.tokenizer_json)
                     .map_err(|e| anyhow::anyhow!("tokenizer.json: {e}"))?,
             );
-            let eos_ids = ["<|im_end|>", "<|endoftext|>"]
-                .iter()
-                .filter_map(|t| tokenizer.token_to_id(t))
-                .collect();
+            // As every backend's load: a marker that is a plain word could be
+            // typed by a message, and an answer needs a token that ends it.
+            crate::prompt::require_control_markers(&tokenizer, crate::arch::Architecture::Qwen3)
+                .map_err(|e| anyhow::anyhow!(e))?;
+            let eos_ids = crate::prompt::eos_ids(&tokenizer, &["<|im_end|>", "<|endoftext|>"])
+                .map_err(|e| anyhow::anyhow!(e))?;
             let context_tokens = ModelSpec::parse(&artifacts.config_json)?
                 .decoder
                 .max_position_embeddings;
@@ -169,6 +173,7 @@ mod linked {
                 engine: Mutex::new(engine),
                 tokenizer,
                 eos_ids,
+                token_table: stepped::TableCache::default(),
                 digest_hex,
                 context_tokens,
                 facts,
@@ -245,6 +250,14 @@ mod linked {
         ) -> anyhow::Result<Completion> {
             self.generate_streaming(prompt, params, &mut NoSink)
         }
+        fn generate_whole(
+            &self,
+            prompt: &Prompt,
+            params: &GenerationParams,
+            sink: &mut dyn TokenSink,
+        ) -> anyhow::Result<Completion> {
+            self.generate_streaming(prompt, params, sink)
+        }
         fn generate_streaming(
             &self,
             prompt: &Prompt,
@@ -257,14 +270,20 @@ mod linked {
                 params.max_tokens,
                 self.context_tokens,
             )?;
+            // Before the lock: the table is read once, and a schema this
+            // vocabulary cannot hold is refused without waiting for the engine.
+            let table = self
+                .token_table
+                .get(&self.tokenizer, &self.eos_ids, params)?;
             // A panic under this lock dropped its session, and that drop cleared
             // the client bytes; when the clear fails Core poisons the engine and
             // `session` retries it before any prefill.
             let mut guard = self.engine.lock().unwrap_or_else(PoisonError::into_inner);
             let engine: &mut Engine = &mut guard;
-            stepped::run(
+            stepped::run_with_table(
                 &self.tokenizer,
                 &self.eos_ids,
+                table,
                 &req,
                 params,
                 sink,

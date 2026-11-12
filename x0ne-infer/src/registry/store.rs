@@ -138,7 +138,9 @@ pub fn sha256_file(path: &Path) -> std::io::Result<String> {
         }
         h.update(&buf[..n]);
     }
-    Ok(hex(&h.finalize()))
+    let got = hex(&h.finalize());
+    crate::hash_passes::note(&got);
+    Ok(got)
 }
 
 pub fn hex(bytes: &[u8]) -> String {
@@ -240,7 +242,17 @@ impl Store {
     /// Re-hash every file of an installed model against its record.
     pub fn verify(&self, installed: &Installed) -> Result<(), String> {
         self.check_sizes(installed)?;
-        for f in &installed.record.files {
+        self.verify_files(installed, |_| true)
+    }
+
+    /// Re-hash the files of an installed model that `want` names against its
+    /// record, read from disk. No size check: [`Store::check_sizes`] first.
+    pub fn verify_files(
+        &self,
+        installed: &Installed,
+        want: impl Fn(&FileSpec) -> bool,
+    ) -> Result<(), String> {
+        for f in installed.record.files.iter().filter(|f| want(f)) {
             let p = installed.dir.join(&f.path);
             let got = sha256_file(&p).map_err(|e| format!("{}: {e}", p.display()))?;
             if got != f.sha256 {

@@ -178,7 +178,13 @@ pub struct Clock {
 impl Clock {
     /// Within a tokio runtime. The first frame is built at once.
     pub fn start() -> Self {
-        Self::every(Instant::now(), TICK)
+        Self::ticking(crate::padding::Tick::PRODUCTION)
+    }
+
+    /// Within a tokio runtime. The first frame is built at once, then one
+    /// every `tick`.
+    pub fn ticking(tick: crate::padding::Tick) -> Self {
+        Self::every(Instant::now(), tick.period())
     }
 
     /// Frames built at `first`, then every `period`, each written

@@ -276,6 +276,16 @@ pub fn parse_listen(spec: &str) -> Result<std::net::SocketAddr, String> {
 /// accounts), or nothing is written: a directory another account made ahead
 /// (`<temp>/x0ne-engine-<uid>`, `bin/proxy.rs`) gets no key.
 pub fn write_key_file(runtime_dir: &Path, key: &[u8; 32]) -> Result<PathBuf, String> {
+    write_key_file_as(runtime_dir, KEY_FILE_NAME, key)
+}
+
+/// [`write_key_file`] under another file name in the same directory: another
+/// server's key beside the relay's, so that neither replaces the other.
+pub fn write_key_file_as(
+    runtime_dir: &Path,
+    file_name: &str,
+    key: &[u8; 32],
+) -> Result<PathBuf, String> {
     let dir = runtime_dir.join(SUBDIR);
     #[cfg(unix)]
     {
@@ -284,7 +294,7 @@ pub fn write_key_file(runtime_dir: &Path, key: &[u8; 32]) -> Result<PathBuf, Str
     }
     #[cfg(not(unix))]
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let path = dir.join(KEY_FILE_NAME);
+    let path = dir.join(file_name);
     let _ = std::fs::remove_file(&path);
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create_new(true);
@@ -352,7 +362,7 @@ fn foreign_dir(dir: &Path, meta: &std::fs::Metadata, uid: u32, leaf: bool) -> Op
 
 /// `subtle`, through p256's re-export: no crate added. Unequal lengths answer at
 /// once: the bearer's length is public, 64 hex digits.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     use p256::elliptic_curve::subtle::ConstantTimeEq as _;
     a.ct_eq(b).into()
 }
@@ -1948,13 +1958,15 @@ fn serve(
     state: Option<Arc<LocalState>>,
 ) -> LocalServer {
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();
-    let task = tokio::spawn(async move {
-        let _ = axum::serve(listener, app)
-            .with_graceful_shutdown(async move {
-                let _ = rx.await;
-            })
-            .await;
-    });
+    // A connection has `server::HEAD_TIMEOUT` to send each request head.
+    let task = tokio::spawn(crate::server::serve_http(
+        listener,
+        app,
+        crate::server::HEAD_TIMEOUT,
+        async move {
+            let _ = rx.await;
+        },
+    ));
     LocalServer {
         listen,
         shutdown: Some(tx),
@@ -3998,6 +4010,52 @@ mod tests {
                 .unwrap();
             assert_eq!(resp.status(), StatusCode::OK);
             assert!(!resp.headers().contains_key("x-should-retry"));
+            server.stop().await;
+        }
+
+        // ── connections that send no request ─────────────────────────────
+
+        /// Over the real listener: a connection that sends nothing, half a
+        /// request line, or a head without its end is closed 61 minutes
+        /// after it was accepted, not before, and the endpoint still answers.
+        /// Until 2026-11-10 nothing closed it: each stayed open for as long as
+        /// its peer did. The clock is paused once the connections are open.
+        #[tokio::test]
+        async fn a_connection_that_sends_no_whole_head_is_closed_after_61_minutes() {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let (st, _fatal) = state(&identity());
+            let server = start(st.clone(), "127.0.0.1:0").await.unwrap();
+            let opened = Instant::now();
+            let mut silent = Vec::new();
+            for sent in ["", "GET /v1/mod", "GET /v1/models HTTP/1.1\r\nHost: "] {
+                let mut sock = tokio::net::TcpStream::connect(server.listen).await.unwrap();
+                sock.write_all(sent.as_bytes()).await.unwrap();
+                silent.push((sent, sock));
+            }
+            // The server has read what was sent before the clock stops.
+            let bearer = crate::cloud_config::hex(&[1u8; 32]);
+            let http = reqwest::Client::builder().no_proxy().build().unwrap();
+            let status = format!("http://{}/x0ne/v1/status", server.listen);
+            let resp = http.get(&status).bearer_auth(&bearer).send().await.unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+            drop(http);
+
+            tokio::time::pause();
+            for (sent, sock) in &mut silent {
+                let mut buf = [0u8; 256];
+                let closed = tokio::time::timeout(Duration::from_mins(62), async {
+                    // Whatever the server says first, its end is what counts.
+                    while matches!(sock.read(&mut buf).await, Ok(n) if n > 0) {}
+                })
+                .await;
+                assert!(closed.is_ok(), "{sent:?}: still open after 62 minutes");
+                let after = opened.elapsed();
+                assert!(after >= Duration::from_mins(61), "{sent:?}: {after:?}");
+            }
+            tokio::time::resume();
+            let http = reqwest::Client::builder().no_proxy().build().unwrap();
+            let resp = http.get(&status).bearer_auth(&bearer).send().await.unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
             server.stop().await;
         }
 

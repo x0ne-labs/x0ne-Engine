@@ -28,9 +28,14 @@ Apache-2.0 crate depends on an AGPL-3.0-only crate.
 | `x0ne-engine-cloud` | `x0ne-engine-cloud` | AGPL-3.0-only | the cloud lifecycle behind `x0ne-engine cloud` |
 | `x0ne-core-kernels` | `x0ne-core/kernels` | AGPL-3.0-only | x0ne Core's CUDA kernels |
 | `x0ne-core-runtime` | `x0ne-core/runtime` | AGPL-3.0-only | x0ne Core's runtime, the backend `core` of x0ne-infer |
+| `x0ne-core-oracle` | `x0ne-core/oracle` | AGPL-3.0-only | a CPU reference of x0ne Core's kernels and the tests of this copy; no binary ships it |
 | `x0ne-sdk` | `x0ne-sdk` | Apache-2.0 | the caller's side: checks the proof, seals requests |
 | `x0ne-confidential` | `x0ne-confidential` | Apache-2.0 | the attestation vocabulary the crates share |
 | `x0ne-ohttp` | `x0ne-ohttp` | Apache-2.0 | a prototype of Oblivious HTTP that no x0ne binary uses |
+
+A tree may add a workspace of its own, which the root's `Cargo.toml` neither
+lists nor excludes; that workspace lists its crates in its own `LICENSING.md`,
+with the same table.
 
 ## Files of x0ne-infer compiled into x0ne-sdk
 

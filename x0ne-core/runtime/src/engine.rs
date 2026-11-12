@@ -158,60 +158,78 @@ fn plan_bufs(
     a: &mut Arena<Building>,
 ) -> Result<Bufs> {
     let cd = Class::ClientData;
-    let (h, n) = (c.hidden_size as u64, chunk as u64);
-    let kv = c.num_hidden_layers as u64 * 2 * max_ctx as u64 * c.kv_dim() as u64 * 2;
-    // Rows of the SwiGLU input and output: one per token, or one per (token, chosen expert).
-    let (ffn_rows, inter) = match moe {
-        None => (n, c.intermediate_size as u64),
-        Some(m) => (
-            n * m.num_experts_per_tok as u64,
-            m.moe_intermediate_size as u64,
-        ),
+    let (h, n, l) = (
+        c.hidden_size as u64,
+        chunk as u64,
+        c.num_hidden_layers as u64,
+    );
+    // Each size is a product of config values: an overflow is refused, never wrapped.
+    let mut buf = |label: &str, factors: &[u64], class: Class| {
+        let len = factors
+            .iter()
+            .try_fold(1u64, |p, &f| p.checked_mul(f))
+            .ok_or_else(|| Error::Arena(format!("{label}: its size overflows")))?;
+        a.alloc(label, len, class)
+    };
+    // SwiGLU rows per token: one, or one per chosen expert.
+    let (per_token, inter) = match moe {
+        None => (1, c.intermediate_size as u64),
+        Some(m) => (m.num_experts_per_tok as u64, m.moe_intermediate_size as u64),
     };
     let moe_bufs = match moe {
         None => None,
         Some(m) => {
-            let (e, k, l) = (
-                m.num_experts as u64,
-                m.num_experts_per_tok as u64,
-                c.num_hidden_layers as u64,
-            );
+            let (e, k) = (m.num_experts as u64, m.num_experts_per_tok as u64);
             Some(MoeBufs {
-                router_logits: a.alloc("moe_router_logits", n * e * 4, cd)?,
-                ids: a.alloc("moe_ids", l * n * k * 4, cd)?,
-                weights: a.alloc("moe_weights", l * n * k * 4, cd)?,
-                y: a.alloc("moe_y", n * k * h * 4, cd)?,
+                router_logits: buf("moe_router_logits", &[n, e, 4], cd)?,
+                ids: buf("moe_ids", &[l, n, k, 4], cd)?,
+                weights: buf("moe_weights", &[l, n, k, 4], cd)?,
+                y: buf("moe_y", &[n, k, h, 4], cd)?,
             })
         }
     };
+    let kv = [l, 2, max_ctx as u64, c.kv_dim() as u64, 2];
+    let (qkv, q) = (c.qkv_rows() as u64, c.q_dim() as u64);
     Ok(Bufs {
-        inv_freq: a.alloc("inv_freq", (c.head_dim / 2 * 4) as u64, Class::Weights)?,
-        kv: a.alloc("kv_cache", kv, cd)?,
-        tokens: a.alloc("tokens", n * 4, cd)?,
-        pos: a.alloc("pos", 4, cd)?,
-        residual: a.alloc("residual", n * h * 4, cd)?,
-        delta: a.alloc("delta", n * h * 2, cd)?,
-        normed: a.alloc("normed", n * h * 2, cd)?,
-        qkv: a.alloc("qkv", n * c.qkv_rows() as u64 * 2, cd)?,
-        q: a.alloc("q", n * c.q_dim() as u64 * 2, cd)?,
-        attn: a.alloc("attn", n * c.q_dim() as u64 * 2, cd)?,
-        gate_up: a.alloc("gate_up", ffn_rows * 2 * inter * 2, cd)?,
-        act: a.alloc("act", ffn_rows * inter * 2, cd)?,
-        logits: a.alloc("logits", n * c.vocab_size as u64 * 4, cd)?,
-        argmax: a.alloc("argmax", n * 4, cd)?,
-        workspace: a.alloc("cublas_workspace", CUBLAS_WORKSPACE, cd)?,
-        attn_state: a.alloc(
+        inv_freq: buf("inv_freq", &[(c.head_dim / 2) as u64, 4], Class::Weights)?,
+        kv: buf("kv_cache", &kv, cd)?,
+        tokens: buf("tokens", &[n, 4], cd)?,
+        pos: buf("pos", &[4], cd)?,
+        residual: buf("residual", &[n, h, 4], cd)?,
+        delta: buf("delta", &[n, h, 2], cd)?,
+        normed: buf("normed", &[n, h, 2], cd)?,
+        qkv: buf("qkv", &[n, qkv, 2], cd)?,
+        q: buf("q", &[n, q, 2], cd)?,
+        attn: buf("attn", &[n, q, 2], cd)?,
+        gate_up: buf("gate_up", &[n, per_token, 2, inter, 2], cd)?,
+        act: buf("act", &[n, per_token, inter, 2], cd)?,
+        logits: buf("logits", &[n, c.vocab_size as u64, 4], cd)?,
+        argmax: buf("argmax", &[n, 4], cd)?,
+        workspace: buf("cublas_workspace", &[CUBLAS_WORKSPACE], cd)?,
+        attn_state: buf(
             "attention_split_state",
-            split_state_bytes(c.num_attention_heads, splits),
+            &[split_state_bytes(c.num_attention_heads, splits)],
             cd,
         )?,
-        attn_counter: a.alloc(
+        attn_counter: buf(
             "attention_split_counter",
-            c.num_key_value_heads as u64 * 4,
+            &[c.num_key_value_heads as u64, 4],
             cd,
         )?,
         moe: moe_bufs,
     })
+}
+
+/// The product of `factors`, `None` past usize, which is past u32 as well.
+fn product(factors: &[usize]) -> Option<usize> {
+    factors.iter().try_fold(1usize, |p, &f| p.checked_mul(f))
+}
+
+/// True when every size fits the u32 a kernel takes.
+fn all_fit_u32(sizes: &[Option<usize>]) -> bool {
+    sizes
+        .iter()
+        .all(|s| s.is_some_and(|v| u32::try_from(v).is_ok()))
 }
 
 /// Limits of the kernels and of the u32 sizes they take.
@@ -234,10 +252,10 @@ fn check_config(c: &Qwen3Config, moe: Option<&MoeConfig>, opts: EngineOptions) -
             return format_err("moe_intermediate_size is not a positive multiple of 8");
         }
         let big = [
-            m.num_experts * 2 * m.moe_intermediate_size,
-            m.num_experts_per_tok * c.hidden_size,
+            product(&[m.num_experts, 2, m.moe_intermediate_size]),
+            product(&[m.num_experts_per_tok, c.hidden_size]),
         ];
-        if big.iter().any(|&v| u32::try_from(v).is_err()) {
+        if !all_fit_u32(&big) {
             return format_err("a MoE dimension exceeds u32");
         }
     }
@@ -258,12 +276,13 @@ fn check_config(c: &Qwen3Config, moe: Option<&MoeConfig>, opts: EngineOptions) -
         ));
     }
     let big = [
-        c.vocab_size,
-        c.intermediate_size * 2,
-        c.qkv_rows(),
-        opts.max_ctx * c.kv_dim(),
+        Some(c.vocab_size),
+        Some(c.hidden_size),
+        product(&[c.intermediate_size, 2]),
+        Some(c.qkv_rows()),
+        product(&[opts.max_ctx, c.kv_dim()]),
     ];
-    if big.iter().any(|&v| u32::try_from(v).is_err()) {
+    if !all_fit_u32(&big) {
         return format_err("a dimension exceeds u32");
     }
     Ok(())
@@ -1330,5 +1349,106 @@ impl Drop for Session<'_> {
             self.open = false;
             let _ = self.e.scrub();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dense(layers: usize) -> Qwen3Config {
+        Qwen3Config {
+            hidden_size: 1024,
+            intermediate_size: 3072,
+            num_hidden_layers: layers,
+            num_attention_heads: 16,
+            num_key_value_heads: 8,
+            head_dim: 128,
+            vocab_size: 151936,
+            max_position_embeddings: 4096,
+            rms_norm_eps: 1e-6,
+            rope_theta: 1e6,
+            tie_word_embeddings: true,
+        }
+    }
+
+    fn plan(c: &Qwen3Config, moe: Option<&MoeConfig>) -> Result<Arena<Building>> {
+        let mut a = Arena::new();
+        plan_bufs(c, moe, 4096, 512, 4, &mut a)?;
+        Ok(a)
+    }
+
+    fn sizes(a: &Arena<Building>) -> Vec<(&str, u64)> {
+        a.regions()
+            .iter()
+            .map(|r| (r.label.as_str(), r.len))
+            .collect()
+    }
+
+    #[test]
+    fn plan_bufs_refuses_a_kv_cache_that_overflows() {
+        // 2^50 layers x 2 x 2^12 positions x 2^10 bytes x 2 = 2^74.
+        let err = plan(&dense(1 << 50), None).err().expect("planned");
+        assert!(err.to_string().contains("kv_cache"), "{err}");
+    }
+
+    #[test]
+    fn plan_bufs_refuses_a_moe_buffer_that_overflows() {
+        // 512 rows x 2^54 experts x 4 bytes = 2^65.
+        let moe = MoeConfig {
+            num_experts: 1 << 54,
+            num_experts_per_tok: 8,
+            moe_intermediate_size: 2048,
+        };
+        let err = plan(&dense(36), Some(&moe)).err().expect("planned");
+        assert!(err.to_string().contains("moe_router_logits"), "{err}");
+    }
+
+    /// The layout the launches address, bytes per buffer in arena order.
+    #[test]
+    fn plan_bufs_keeps_its_layout() {
+        let split = 16 * 4 * x0ne_core_kernels::SPLIT_STATE as u64 * 4;
+        let shared = |gate_up: u64, act: u64| {
+            vec![
+                ("inv_freq", 256),
+                ("kv_cache", 36 * 2 * 4096 * 1024 * 2),
+                ("tokens", 512 * 4),
+                ("pos", 4),
+                ("residual", 512 * 1024 * 4),
+                ("delta", 512 * 1024 * 2),
+                ("normed", 512 * 1024 * 2),
+                ("qkv", 512 * 4096 * 2),
+                ("q", 512 * 2048 * 2),
+                ("attn", 512 * 2048 * 2),
+                ("gate_up", gate_up),
+                ("act", act),
+                ("logits", 512 * 151936 * 4),
+                ("argmax", 512 * 4),
+                ("cublas_workspace", CUBLAS_WORKSPACE),
+                ("attention_split_state", split),
+                ("attention_split_counter", 8 * 4),
+            ]
+        };
+        let a = plan(&dense(36), None).unwrap();
+        assert_eq!(
+            sizes(&a),
+            shared(512 * 2 * 3072 * 2, 512 * 3072 * 2),
+            "dense"
+        );
+
+        let moe = MoeConfig {
+            num_experts: 128,
+            num_experts_per_tok: 8,
+            moe_intermediate_size: 2048,
+        };
+        let a = plan(&dense(36), Some(&moe)).unwrap();
+        let mut want = vec![
+            ("moe_router_logits", 512 * 128 * 4),
+            ("moe_ids", 36 * 512 * 8 * 4),
+            ("moe_weights", 36 * 512 * 8 * 4),
+            ("moe_y", 512 * 8 * 1024 * 4),
+        ];
+        want.extend(shared(512 * 8 * 2 * 2048 * 2, 512 * 8 * 2048 * 2));
+        assert_eq!(sizes(&a), want, "MoE");
     }
 }

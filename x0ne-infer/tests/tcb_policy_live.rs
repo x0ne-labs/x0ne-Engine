@@ -82,6 +82,25 @@ fn the_gce_host_passes_the_production_policy_on_intels_latest_recovery() {
     assert_eq!(module.status, Some(TcbStatus::UpToDate));
 }
 
+/// A QE identity rewritten to name another quoting enclave is refused at its
+/// signature, on the very quote and collateral that pass when it is intact:
+/// the identity is never read before Intel's signature over its raw bytes
+/// holds (CVE-2026-22696, in another verifier, read it unsigned).
+#[test]
+fn a_qe_identity_rewritten_to_name_another_enclave_is_refused_at_its_signature() {
+    live(GCE_QUOTE, TCB_EARLY, QE_EARLY, NOW, &PROD).expect("control: intact, accepted");
+    for field in ["\"mrsigner\":\"", "\"isvprodid\":", "\"tcbStatus\":\""] {
+        let at = QE_EARLY.find(field).unwrap_or_else(|| panic!("{field}")) + field.len();
+        let mut forged = QE_EARLY.to_string();
+        let other = if &forged[at..=at] == "1" { "2" } else { "1" };
+        forged.replace_range(at..=at, other);
+        assert_ne!(forged, QE_EARLY);
+        let e = live(GCE_QUOTE, TCB_EARLY, &forged, NOW, &PROD)
+            .expect_err("a forged QE identity must refuse");
+        assert!(e.to_string().contains("signature"), "{field}: {e}");
+    }
+}
+
 /// SECURITY (TOB-WAPI-8): Intel's default answer is evaluation 20, under
 /// which a module two recoveries behind still reads UpToDate. Below the
 /// floor it is refused, real signature and all; only a policy lowered to 20

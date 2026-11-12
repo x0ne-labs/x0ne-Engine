@@ -55,6 +55,20 @@ impl ServingLease {
         self
     }
 
+    /// The same lease, its turns and its refusals on sizes of `tick`.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn ticking(mut self, tick: crate::padding::Tick) -> Self {
+        self.turns = crate::padding::Turns::every(tick);
+        self
+    }
+
+    /// The tick of the time padding: of the turns, and of what is refused
+    /// before one.
+    pub fn tick(&self) -> crate::padding::Tick {
+        self.turns.tick()
+    }
+
     /// The model's next turn: taken before a chat computes, held past it
     /// until the answer's time is a size, so that the next one starts then.
     pub async fn take_turn(&self) -> crate::padding::Turn {

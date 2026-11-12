@@ -596,9 +596,11 @@ async fn run(broker: x0ne_infer::keys::HeldKeyBroker) -> i32 {
                 return 83;
             }
         };
-        let attested =
-            x0ne_infer::nras_http::attest_gpu(&args.nras_url, &request, nras_key.as_ref()).await;
-        let jwks = x0ne_infer::nras_http::fetch_jwks(&args.nras_jwks_url).await;
+        // Together: neither waits for the other's answer (attest_v2.rs).
+        let (attested, jwks) = tokio::join!(
+            x0ne_infer::nras_http::attest_gpu(&args.nras_url, &request, nras_key.as_ref()),
+            x0ne_infer::nras_http::fetch_jwks(&args.nras_jwks_url),
+        );
         match (attested, jwks) {
             (Ok((overall, per_gpu)), Ok(jwks)) => (overall, jwks, per_gpu, serials),
             (Err(e), _) | (_, Err(e)) => {
@@ -1644,7 +1646,7 @@ mod tests {
         }
     }
 
-    /// SECURITY: in local mode the operator's `--expected-model-digest` is
+    /// SECURITY: outside cloud mode the operator's `--expected-model-digest` is
     /// compared on the plaintext weights read from disk before a backend is
     /// opened or reads them: weights other than the pinned ones never reach
     /// safetensors, Core's arena or the GPU (77). The comparison on the model

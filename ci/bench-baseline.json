@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "about": "make bench (scripts/bench.sh): a run is red when one of its rates (a metric named *_tok_s or *_per_s) falls, or one of its times (any other) rises, by more than its tier's tolerance_pct percent of the value held here for the same GPU. scripts/bench.sh update records a clean run; --replace writes it as it is. The tolerances are placeholders until the first run on the card: set them from the spread that run shows. Every entry is a run recorded on a GPU: none is written by hand.",
+  "tolerance_pct": {
+    "core": 5,
+    "engine": 10,
+    "load": 15,
+    "soak": 15
+  },
+  "runs": {}
+}

@@ -301,10 +301,11 @@ impl E2e {
     }
 }
 
-/// A sealed request refused before its answer: 400, [`REFUSED`], one second
-/// after `asked` as a whole answer refused before its turn (`server::chat_as`).
-pub async fn refused(asked: tokio::time::Instant) -> Response {
-    at_floor(asked).await;
+/// A sealed request refused before its answer: 400, [`REFUSED`], the floor of
+/// `tick` (one second) after `asked`, as a whole answer refused before its
+/// turn (`server::chat_as`).
+pub async fn refused(asked: tokio::time::Instant, tick: crate::padding::Tick) -> Response {
+    at_floor(asked, tick).await;
     (
         StatusCode::BAD_REQUEST,
         axum::Json(serde_json::json!({ "error": REFUSED })),
@@ -312,11 +313,10 @@ pub async fn refused(asked: tokio::time::Instant) -> Response {
         .into_response()
 }
 
-/// Sleeps to the floor of every refusal: one second after `asked`.
-async fn at_floor(asked: tokio::time::Instant) {
-    let floor = crate::stream::TICK
-        .saturating_mul(u32::try_from(crate::padding::MIN_TICKS).unwrap_or(u32::MAX));
-    tokio::time::sleep_until(asked + floor).await;
+/// Sleeps to the floor of every refusal: [`crate::padding::Tick::floor`],
+/// one second, after `asked`.
+async fn at_floor(asked: tokio::time::Instant, tick: crate::padding::Tick) {
+    tokio::time::sleep_until(asked + tick.floor()).await;
 }
 
 /// The padded JSON error sealed in place of an answer that cannot be.
@@ -380,15 +380,16 @@ pub async fn answer(
     asked: tokio::time::Instant,
 ) -> Response {
     let Ok((opened, responder)) = e2e.admit(sealed, now) else {
-        return refused(asked).await;
+        return refused(asked, server.lease.tick()).await;
     };
     // `Gateway::open` parsed it as one JSON object of text already.
     let Ok(body) = serde_json::from_slice::<serde_json::Value>(&opened.body) else {
         e2e.counts.refused_open.fetch_add(1, Ordering::SeqCst);
-        return refused(asked).await;
+        return refused(asked, server.lease.tick()).await;
     };
     drop(opened);
     let served = served.to_string();
+    let tick = server.lease.tick();
     let answered = tokio::spawn(async move {
         let response = crate::server::chat_contained_as(server, slot, body, &served).await;
         let status = response.status().as_u16();
@@ -401,7 +402,7 @@ pub async fn answer(
         Ok((_, Err(_))) => seal(&e2e.counts, &responder, 500, &unsealed_error(), &nonce),
         // The payload is dropped unread: it may quote the question.
         Err(_) => {
-            let after = crate::padding::release_after(asked.elapsed(), crate::stream::TICK);
+            let after = crate::padding::release_after(asked.elapsed(), tick.period());
             tokio::time::sleep_until(asked + after).await;
             seal(&e2e.counts, &responder, 500, &unsealed_error(), &nonce)
         }
@@ -444,16 +445,16 @@ pub async fn answer_stream(
     use crate::e2e_stream::{cap, SealedStream, Start};
     use crate::openai::error::ApiError;
     let Ok((opened, responder)) = e2e.admit_stream(sealed, now) else {
-        return refused(asked).await;
+        return refused(asked, server.lease.tick()).await;
     };
     let Ok(body) = serde_json::from_slice::<serde_json::Value>(&opened.body) else {
         e2e.counts.refused_open.fetch_add(1, Ordering::SeqCst);
-        return refused(asked).await;
+        return refused(asked, server.lease.tick()).await;
     };
     drop(opened);
     let Ok(writer) = responder.writer(&nonce) else {
         e2e.counts.unsealed.fetch_add(1, Ordering::SeqCst);
-        at_floor(asked).await;
+        at_floor(asked, server.lease.tick()).await;
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             axum::Json(serde_json::json!({ "error": UNSEALED })),

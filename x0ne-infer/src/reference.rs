@@ -1917,9 +1917,8 @@ pub(crate) mod tests {
     const REFERENCE_1017_V1: &[u8] = include_bytes!("../tests/reference/x0ne-cvm-0.2-v1.json");
 
     fn quote_1017() -> TdxQuoteClaims {
-        let mut quote = vec![0u8; 48];
-        quote[0] = 4;
-        quote[4] = 0x81;
+        let mut quote = crate::pcs::tests::td_quote_header_and_body();
+        quote.truncate(48);
         quote.extend_from_slice(TDREPORT_1017);
         x0ne_confidential::tdx_quote::parse(&quote).expect("TD report body")
     }

@@ -210,6 +210,12 @@ pub struct Knobs {
     pub token_margin: Duration,
     /// The name server asked for this machine's public address ([`myaddr::SERVER`]).
     pub myaddr_server: String,
+    /// Upper bound for one request to the provider's API, answer included.
+    pub http_timeout: Duration,
+    /// Test builds: the step of `up` that panics (`creating`, `booting`,
+    /// `verifying`, `serving`), to show that its VM is deleted all the same.
+    #[cfg(feature = "test-endpoints")]
+    pub panic_at: Option<String>,
 }
 
 impl Knobs {
@@ -232,6 +238,9 @@ impl Knobs {
             min_serving: Duration::from_secs(MIN_SERVING_SECS),
             token_margin: Duration::from_secs(TOKEN_MARGIN_SECS),
             myaddr_server: myaddr::SERVER.into(),
+            http_timeout: Duration::from_mins(5),
+            #[cfg(feature = "test-endpoints")]
+            panic_at: None,
         }
     }
 
@@ -266,6 +275,12 @@ impl Knobs {
         if let Some(b) = ms("X0NE_ENGINE_CLOUD_TEST_BOOT_TIMEOUT_MS")? {
             k.boot_timeout = b;
         }
+        if let Some(t) = ms("X0NE_ENGINE_CLOUD_TEST_OP_TIMEOUT_MS")? {
+            k.op_timeout = t;
+        }
+        if let Some(t) = ms("X0NE_ENGINE_CLOUD_TEST_HTTP_TIMEOUT_MS")? {
+            k.http_timeout = t;
+        }
         if let Some(m) = ms("X0NE_ENGINE_CLOUD_TEST_MIN_SERVING_MS")? {
             k.min_serving = m;
         }
@@ -287,6 +302,18 @@ impl Knobs {
                 })
                 .ok_or_else(|| Failure::Usage(format!("{name}: a loopback ip:port expected")))?
                 .to_string();
+        }
+        #[cfg(feature = "test-endpoints")]
+        {
+            let name = "X0NE_ENGINE_CLOUD_TEST_PANIC_AT";
+            if let Some(v) = std::env::var_os(name) {
+                if !loopback {
+                    return Err(Failure::Usage(format!(
+                        "{name} is a test setting: refused unless X0NE_ENGINE_GCP_ENDPOINT is the loopback"
+                    )));
+                }
+                k.panic_at = Some(v.to_string_lossy().into_owned());
+            }
         }
         Ok(k)
     }

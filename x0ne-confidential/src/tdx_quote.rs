@@ -7,8 +7,9 @@
 //! carries exactly this meaning, and the cc report prints the limitation.
 //!
 //! Layout (Intel TD Quote v4, the only version parsed): 48-byte header
-//! (version u16 LE at 0, tee_type
-//! u32 LE at 4, TDX = 0x81), then the 584-byte TD report body. Body offsets:
+//! (version u16 LE at 0, att_key_type u16 LE at 2, 2 = ECDSA with P-256,
+//! tee_type u32 LE at 4, TDX = 0x81, two reserved u16 at 8, qe_vendor_id at
+//! 12..28, user data at 28..48), then the 584-byte TD report body. Body offsets:
 //! td_attributes [120..128], mr_td [136..184], rtmr0..3 [328..520],
 //! report_data [520..584]. [280..328] is MROWNERCONFIG, not RTMR0.
 
@@ -23,6 +24,19 @@ const MR_TD: usize = 136;
 const RTMR0: usize = 328;
 const REPORT_DATA: usize = 520;
 const TEE_TDX: u32 = 0x81;
+const ATT_KEY_TYPE: usize = 2;
+const QE_VENDOR_ID: usize = 12;
+
+/// `att_key_type` of a quote signed with ECDSA on P-256, the one type
+/// `x0ne-infer` verifies. 3 is ECDSA on P-384.
+pub const ATT_KEY_ECDSA_P256: u16 = 2;
+
+/// `qe_vendor_id` of Intel's quoting enclave. Intel's verifier requires it
+/// (SGX-TDX-DCAP-QuoteVerificationLibrary, `Quote::validate`, read
+/// 2026-11-10); the two real quotes of the tree carry it.
+pub const INTEL_QE_VENDOR_ID: [u8; 16] = [
+    0x93, 0x9a, 0x72, 0x33, 0xf7, 0x9c, 0x4c, 0xa9, 0x94, 0x0a, 0x0d, 0xb3, 0x95, 0x7f, 0x06, 0x07,
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TdxQuoteClaims {
@@ -90,14 +104,43 @@ pub enum QuoteRejected {
     TooShort { len: usize, need: usize },
     NotTdx { tee_type: u32 },
     UnsupportedVersion { version: u16 },
+    UnsupportedAttestationKeyType { att_key_type: u16 },
+    NotIntelQe { qe_vendor_id: [u8; 16] },
 }
 
-pub fn parse(quote: &[u8]) -> Result<TdxQuoteClaims, QuoteRejected> {
-    let need = HEADER + BODY;
-    if quote.len() < need {
+impl std::fmt::Display for QuoteRejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooShort { len, need } => write!(f, "{len} bytes, a TD quote has {need}"),
+            Self::NotTdx { tee_type } => {
+                write!(f, "tee_type {tee_type:#x} is not TDX (expected {TEE_TDX:#x})")
+            }
+            Self::UnsupportedVersion { version } => {
+                write!(f, "version {version} unsupported (expected 4)")
+            }
+            Self::UnsupportedAttestationKeyType { att_key_type } => write!(
+                f,
+                "att_key_type {att_key_type} unsupported (expected {ATT_KEY_ECDSA_P256}: ECDSA with P-256)"
+            ),
+            Self::NotIntelQe { qe_vendor_id } => write!(
+                f,
+                "qe_vendor_id {} is not Intel's ({})",
+                hex(qe_vendor_id),
+                hex(&INTEL_QE_VENDOR_ID)
+            ),
+        }
+    }
+}
+
+/// The fields of the 48-byte header whose value the format fixes: version 4,
+/// an ECDSA P-256 attestation key, TDX, Intel's QE. Each is refused by name.
+/// The header is under the quote's signature; this reads it before any
+/// signature is checked, and says nothing of who wrote the quote.
+pub fn check_header(quote: &[u8]) -> Result<(), QuoteRejected> {
+    if quote.len() < HEADER {
         return Err(QuoteRejected::TooShort {
             len: quote.len(),
-            need,
+            need: HEADER + BODY,
         });
     }
     let version = u16::from_le_bytes([quote[0], quote[1]]);
@@ -113,13 +156,37 @@ pub fn parse(quote: &[u8]) -> Result<TdxQuoteClaims, QuoteRejected> {
     if tee_type != TEE_TDX {
         return Err(QuoteRejected::NotTdx { tee_type });
     }
+    // SECURITY: the signature section is read as a P-256 signature and key
+    // whatever this field says. Another type is another layout and another
+    // curve: refused, not read as this one.
+    let att_key_type = u16::from_le_bytes([quote[ATT_KEY_TYPE], quote[ATT_KEY_TYPE + 1]]);
+    if att_key_type != ATT_KEY_ECDSA_P256 {
+        return Err(QuoteRejected::UnsupportedAttestationKeyType { att_key_type });
+    }
+    let mut qe_vendor_id = [0u8; 16];
+    qe_vendor_id.copy_from_slice(&quote[QE_VENDOR_ID..QE_VENDOR_ID + 16]);
+    if qe_vendor_id != INTEL_QE_VENDOR_ID {
+        return Err(QuoteRejected::NotIntelQe { qe_vendor_id });
+    }
+    Ok(())
+}
+
+pub fn parse(quote: &[u8]) -> Result<TdxQuoteClaims, QuoteRejected> {
+    let need = HEADER + BODY;
+    if quote.len() < need {
+        return Err(QuoteRejected::TooShort {
+            len: quote.len(),
+            need,
+        });
+    }
+    check_header(quote)?;
     let body = &quote[HEADER..HEADER + BODY];
     let mut claims = TdxQuoteClaims {
         td_attributes: [0; 8],
         mr_td: [0; 48],
         rtmr: [[0; 48]; 4],
         report_data: [0; 64],
-        tee_type,
+        tee_type: TEE_TDX,
     };
     claims
         .td_attributes
@@ -211,6 +278,8 @@ mod tests {
     fn synthetic_quote(nonce: &[u8; 64]) -> Vec<u8> {
         let mut q = vec![0u8; 48 + 584 + 8]; // + qe sig len placeholder
         q[0] = 4; // version = 4 (little-endian u16)
+        q[2] = 2; // att_key_type: ECDSA with P-256
+        q[12..28].copy_from_slice(&INTEL_QE_VENDOR_ID);
         q[4..8].copy_from_slice(&0x81u32.to_le_bytes()); // tee_type TDX
         q[48 + 136..48 + 184].copy_from_slice(&[0xAB; 48]); // mr_td
         q[48 + 280..48 + 328].copy_from_slice(&[0xEE; 48]); // mr_owner_config
@@ -233,6 +302,36 @@ mod tests {
             parse(&q),
             Err(QuoteRejected::UnsupportedVersion { version: 5 })
         ));
+    }
+
+    /// The header says which key signs the quote, and the verifier reads a
+    /// P-256 key and signature whatever it says: any other type is refused,
+    /// and the refusal names the field.
+    #[test]
+    fn an_attestation_key_type_other_than_ecdsa_p256_is_refused() {
+        for other in [0u16, 1, 3, 0x0200, 0x0102, u16::MAX] {
+            let mut q = synthetic_quote(&[7u8; 64]);
+            q[2..4].copy_from_slice(&other.to_le_bytes());
+            let e = parse(&q).expect_err("another key type parses");
+            assert_eq!(
+                format!("{e:?}"),
+                format!("UnsupportedAttestationKeyType {{ att_key_type: {other} }}")
+            );
+        }
+    }
+
+    /// The QE vendor of the header is Intel's, as in Intel's own verifier.
+    #[test]
+    fn a_qe_vendor_other_than_intel_is_refused() {
+        for at in 12..28 {
+            let mut q = synthetic_quote(&[7u8; 64]);
+            q[at] ^= 1;
+            let e = parse(&q).expect_err("another QE vendor parses");
+            assert!(
+                format!("{e:?}").starts_with("NotIntelQe { qe_vendor_id"),
+                "{e:?}"
+            );
+        }
     }
 
     #[test]

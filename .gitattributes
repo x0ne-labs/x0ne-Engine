@@ -1,0 +1,3 @@
+# CHANGELOG.md takes entries from many branches at the same place, the top of Unreleased:
+# a cherry-pick or a rebase keeps both sides instead of stopping on a conflict.
+CHANGELOG.md merge=union

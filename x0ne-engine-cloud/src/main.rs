@@ -162,7 +162,7 @@ fn setup(o: &Opts, project: Option<&str>) -> Result<Setup, Failure> {
                 .into(),
         )
     })?;
-    let api = Api::new(ep, source)?;
+    let api = Api::new(ep, source, knobs.http_timeout)?;
     Ok(Setup {
         provider: Box::new(Gcp::new(api, project.clone(), knobs.clone())),
         project,

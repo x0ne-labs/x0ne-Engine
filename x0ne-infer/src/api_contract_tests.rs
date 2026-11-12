@@ -1153,10 +1153,10 @@ async fn play(s: &Surface) {
 async fn the_td_served_directly_answers_the_table() {
     use crate::server::tests::spawn_serving;
     let model = Scripted::default();
-    let ready = spawn_serving(Box::new(model.clone()), Serving::default()).await;
+    let ready = spawn_serving(Box::new(model.clone()), crate::server::tests::short_tick()).await;
     let one_place = Serving {
         admission: Admission::new(0),
-        ..Serving::default()
+        ..crate::server::tests::short_tick()
     };
     let _taken = one_place.admission.try_enter().expect("the one place");
     let full = spawn_serving(Box::new(model), one_place).await;
@@ -1176,15 +1176,17 @@ async fn the_td_served_directly_answers_the_table() {
 
 /// The relay and its TD on the CPU product, ready and with one queue place
 /// that a held question takes (through the TD's routes, not the relay).
-async fn cloud_pair() -> (
+async fn cloud_pair(
+    tick: crate::padding::Tick,
+) -> (
     crate::cloud_e2e_tests::ContractUp,
     crate::cloud_e2e_tests::ContractUp,
     OpensOnDrop,
 ) {
     use crate::cloud_e2e_tests::contract_up;
-    let ready = contract_up(Scripted::default().maker(), None).await;
+    let ready = contract_up(tick, Scripted::default().maker(), None).await;
     let held = Scripted::default();
-    let full = contract_up(held.maker(), Some(0)).await;
+    let full = contract_up(tick, held.maker(), Some(0)).await;
     let routes = full.td.clone();
     let hold = raw("").without_content_type();
     tokio::spawn(async move {
@@ -1207,7 +1209,7 @@ async fn cloud_pair() -> (
 /// its phase `Ready`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_cloud_td_answers_the_table() {
-    let (ready, full, _open) = cloud_pair().await;
+    let (ready, full, _open) = cloud_pair(crate::padding::Tick::SHORT).await;
     play(&Surface {
         name: "the cloud TD",
         column: |r| &r.cloud,
@@ -1226,7 +1228,7 @@ async fn the_cloud_td_answers_the_table() {
 /// of the cloud TD.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_relay_answers_the_table() {
-    let (ready, full, _open) = cloud_pair().await;
+    let (ready, full, _open) = cloud_pair(crate::padding::Tick::SHORT).await;
     let relay = |up: &crate::cloud_e2e_tests::ContractUp| Target::Http {
         base: up.relay.clone(),
         bearer: Some(up.bearer.clone()),
@@ -1416,7 +1418,12 @@ async fn a_refusal_naming_part_of_the_request_leaves_as_a_whole_refusal() {
     let addr =
         crate::server::tests::spawn_serving(Box::new(Scripted::default()), Serving::default())
             .await;
-    let cloud = crate::cloud_e2e_tests::contract_up(Scripted::default().maker(), None).await;
+    let cloud = crate::cloud_e2e_tests::contract_up(
+        crate::padding::Tick::PRODUCTION,
+        Scripted::default().maker(),
+        None,
+    )
+    .await;
     let json = Some("application/json");
     let ok = post_td(addr, &says("hi").to_string(), json).await;
     assert_eq!(ok.status, 200);
@@ -1487,10 +1494,17 @@ async fn a_refusal_naming_part_of_the_request_leaves_as_a_whole_refusal() {
 /// larger than a 200, or one quoting more of the name.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_name_past_16_kib_is_quoted_cut_and_leaves_at_one_size() {
-    let addr =
-        crate::server::tests::spawn_serving(Box::new(Scripted::default()), Serving::default())
-            .await;
-    let cloud = crate::cloud_e2e_tests::contract_up(Scripted::default().maker(), None).await;
+    let addr = crate::server::tests::spawn_serving(
+        Box::new(Scripted::default()),
+        crate::server::tests::short_tick(),
+    )
+    .await;
+    let cloud = crate::cloud_e2e_tests::contract_up(
+        crate::padding::Tick::SHORT,
+        Scripted::default().maker(),
+        None,
+    )
+    .await;
     let json = Some("application/json");
     let ok = post_td(addr, &says("hi").to_string(), json).await;
     assert_eq!(ok.status, 200);

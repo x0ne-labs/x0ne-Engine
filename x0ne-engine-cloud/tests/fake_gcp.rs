@@ -1149,6 +1149,33 @@ fn a_terminal_hangup_while_serving_still_deletes_the_vm() {
     assert_eq!(env.session_state().unwrap()["phase"], "deleted");
 }
 
+/// A delete that Google answers 503 twice is asked again: the VM is deleted
+/// and the session ends as one whose delete answered at once. One transient
+/// fault at the end of a session must not leave a GPU VM billed.
+#[test]
+fn a_deletion_that_fails_twice_in_passing_is_asked_again_and_confirmed() {
+    let gcp = FakeGcp::start(Cloud {
+        vm_delete_faults: 2,
+        ..Cloud::default()
+    });
+    let env = Env::new(Some(Relay::Ok));
+    let mut cmd = env.command(&gcp.base, &up_args(&[]));
+    let mut run = spawn(&env, &mut cmd, Some(TOKEN), "up", None);
+    run.wait_stderr("[5/5] OpenAI API");
+    run.signal(libc::SIGINT);
+    let d = run.finish();
+    assert_eq!(d.code, 0, "{}", d.err);
+    assert!(!d.err.contains("NOT CONFIRMED"), "{}", d.err);
+    let vm = vm_name(&gcp);
+    let asked = gcp
+        .deletes()
+        .iter()
+        .filter(|p| p.ends_with(&format!("/instances/{vm}")))
+        .count();
+    assert_eq!(asked, 3, "two faults, then the delete that is served");
+    assert!(gcp.with(|c| c.vms.is_empty()), "the VM is still there");
+}
+
 #[test]
 fn a_deletion_that_fails_is_exit_94_with_the_commands_to_run() {
     let gcp = FakeGcp::start(Cloud {
@@ -2151,81 +2178,6 @@ fn a_missing_image_is_a_preflight_failure() {
 
 // ── sweep ───────────────────────────────────────────────────────────────────
 
-fn crowded_cloud() -> Cloud {
-    let ours = json!({"x0ne-engine": "session"});
-    let mut c = Cloud::default();
-    let vm = |status: &str, labels: serde_json::Value| Vm {
-        zone: "us-central1-a".into(),
-        status: status.into(),
-        labels,
-        gets: 100,
-    };
-    c.vms
-        .insert("x0ne-engine-a1b2c3".into(), vm("TERMINATED", ours.clone()));
-    c.vms
-        .insert("x0ne-engine-nolabel".into(), vm("TERMINATED", json!({})));
-    c.vms.insert("web-1".into(), vm("RUNNING", ours.clone()));
-    c.disks = vec![
-        (
-            "us-central1-a".into(),
-            json!({"name": "x0ne-engine-a1b2c3", "sizeGb": "200", "labels": ours}),
-        ),
-        (
-            "us-central1-a".into(),
-            json!({"name": "x0ne-engine-data", "sizeGb": "10"}),
-        ),
-        (
-            "europe-west4-c".into(),
-            json!({"name": "db-disk", "sizeGb": "10", "labels": {"x0ne-engine": "x"}}),
-        ),
-    ];
-    c.addresses = vec![
-        (
-            "us-central1".into(),
-            json!({"name": "x0ne-engine-ip1", "status": "RESERVED", "labels": ours}),
-        ),
-        (
-            "global".into(),
-            json!({"name": "x0ne-engine-gip", "status": "RESERVED", "labels": ours}),
-        ),
-        (
-            "us-central1".into(),
-            json!({"name": "x0ne-engine-foreign", "status": "IN_USE"}),
-        ),
-    ];
-    let mut fw = |v: serde_json::Value| {
-        c.firewalls
-            .insert(v["name"].as_str().unwrap().to_string(), v);
-    };
-    fw(
-        json!({"name": "x0ne-engine-a1b2c3", "description": "x0ne-engine session a1b2c3: tcp:443 to this session's VM only",
-              "targetTags": ["x0ne-engine-a1b2c3"]}),
-    );
-    fw(
-        json!({"name": "x0ne-engine-allow", "description": "hand-made rule", "targetTags": ["x0ne-engine-allow"]}),
-    );
-    fw(
-        json!({"name": "x0ne-engine-b1b2b3", "description": "x0ne-engine session b1b2b3: tcp:443",
-              "targetTags": ["web"]}),
-    );
-    fw(
-        json!({"name": "default-allow-ssh", "description": "x0ne-engine session x", "targetTags": ["default-allow-ssh"]}),
-    );
-    c.buckets.insert(
-        "x0ne-engine-import-0123456789ab".into(),
-        json!({"name": "x0ne-engine-import-0123456789ab", "location": "US-CENTRAL1", "labels": {"x0ne-engine": "import"}}),
-    );
-    c.objects
-        .entry("x0ne-engine-import-0123456789ab".into())
-        .or_default()
-        .insert("x0ne-cvm-0-1-0.tar.gz".into(), 10);
-    c.buckets.insert(
-        "x0ne-engine-backups".into(),
-        json!({"name": "x0ne-engine-backups", "location": "EU"}),
-    );
-    c
-}
-
 #[test]
 fn sweep_deletes_only_what_carries_the_prefix_and_the_mark() {
     let gcp = FakeGcp::start(crowded_cloud());
@@ -2318,12 +2270,6 @@ fn sweep_leaves_the_session_this_machine_is_running() {
 }
 
 // ── image import ────────────────────────────────────────────────────────────
-
-fn disk_tar(env: &Env, bytes: usize) -> std::path::PathBuf {
-    let p = env.path("disk.tar.gz");
-    fs::write(&p, (0..bytes).map(|i| (i % 251) as u8).collect::<Vec<_>>()).unwrap();
-    p
-}
 
 #[test]
 fn image_import_goes_through_a_transit_bucket_that_is_removed() {

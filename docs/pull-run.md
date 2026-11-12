@@ -172,7 +172,9 @@ In this order:
    short, is refused with exit 65 and the partial deleted (a cut connection
    stays exit 69 and resumes);
 3. the whole file is hashed from disk, resumed prefix included; a mismatch
-   deletes the partial and fails the pull with exit 65;
+   deletes the partial and fails the pull with exit 65 (a TD in cloud mode
+   hashes the weight files after step 4 instead, in `staging/`, on the
+   mappings it will serve, and refuses the same way before step 6's rename);
 4. only when every file has passed are they moved to `staging/`;
 5. `config.json` is refused if it carries `auto_map` (code shipped with the
    model, what `trust_remote_code` would run) or names another architecture

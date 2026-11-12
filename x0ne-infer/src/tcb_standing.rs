@@ -54,7 +54,8 @@ use crate::tcb_disclosure::TcbDisclosure;
 /// How often the live collateral is re-read while serving. Intel publishes
 /// a TCB recovery on its advisory day and PCS carries it in the `early`
 /// tcbInfo the same day: an hour bounds how long a platform Intel has just
-/// rated OutOfDate keeps answering, at four PCS GETs an hour per process.
+/// rated OutOfDate keeps answering, at six GETs to Intel an hour per process
+/// (four under the strict policy), asked together.
 pub const REVALIDATE_EVERY_SECS: u64 = 3600;
 
 /// Why the live check did not end in the platform's favour.
@@ -249,17 +250,42 @@ pub async fn judge_platform_live(
     let fetch = |what: &str, e: anyhow::Error| LiveFailure::Fetch(format!("{what}: {e:#}"));
     let fmspc = tcb::pck_tcb(quote)?.fmspc_hex;
     let update = policy.acceptance_update();
-    let (tcb_body, tcb_chain) =
-        fetch_pcs_collateral(&tcb::pcs_tcb_url_for(pcs_base_url, &fmspc, update))
-            .await
-            .map_err(|e| fetch("tcbInfo", e))?;
-    let (qe_body, qe_chain) =
-        fetch_pcs_collateral(&tcb::pcs_qe_identity_url_for(pcs_base_url, update))
-            .await
-            .map_err(|e| fetch("QE identity", e))?;
+    // The GETs wait for nothing but the quote: asked for together, each
+    // read below where a serial run fetched it, so the checks keep their
+    // order and the failure is the serial one.
+    let ca = tcb::pck_crl_ca(quote);
+    let tcb_url = tcb::pcs_tcb_url_for(pcs_base_url, &fmspc, update);
+    let qe_url = tcb::pcs_qe_identity_url_for(pcs_base_url, update);
+    let pck_crl_url = ca
+        .as_ref()
+        .ok()
+        .map(|ca| tcb::pcs_pck_crl_url(pcs_base_url, ca));
+    let mut abreast = crate::abreast::Abreast::new();
+    let tcb_answer = abreast.start(fetch_pcs_collateral(&tcb_url));
+    let qe_answer = abreast.start(fetch_pcs_collateral(&qe_url));
     let early = match update {
         PcsUpdate::Early => None,
-        PcsUpdate::Standard => Some(fetch_early(pcs_base_url, &fmspc).await),
+        PcsUpdate::Standard => Some(abreast.start(fetch_early(pcs_base_url, &fmspc))),
+    };
+    let crl = abreast.start(async {
+        match &pck_crl_url {
+            Some(url) => fetch_pcs_der(url).await,
+            // Never read: the CA that names no CRL refuses first, below.
+            None => Err(anyhow::anyhow!("the PCK names no CRL")),
+        }
+    });
+    let root_crl = abreast.start(fetch_pcs_der(root_crl_url));
+    let (tcb_body, tcb_chain) = abreast
+        .read(tcb_answer)
+        .await
+        .map_err(|e| fetch("tcbInfo", e))?;
+    let (qe_body, qe_chain) = abreast
+        .read(qe_answer)
+        .await
+        .map_err(|e| fetch("QE identity", e))?;
+    let early = match early {
+        None => None,
+        Some(early) => Some(abreast.read(early).await),
     };
     let accept = tcb::Collateral {
         tcb_body: &tcb_body,
@@ -278,12 +304,11 @@ pub async fn judge_platform_live(
             .map_err(Clone::clone)
     });
     let judgement = tcb::judge_live(quote, &accept, latest, anchor, now_unix, policy)?;
-    let ca = tcb::pck_crl_ca(quote)?;
-    let crl = fetch_pcs_der(&tcb::pcs_pck_crl_url(pcs_base_url, ca))
-        .await
-        .map_err(|e| fetch("PCK CRL", e))?;
+    ca?;
+    let crl = abreast.read(crl).await.map_err(|e| fetch("PCK CRL", e))?;
     tcb::verify_pck_crl(quote, &crl, anchor, now_unix, policy)?;
-    let root_crl = fetch_pcs_der(root_crl_url)
+    let root_crl = abreast
+        .read(root_crl)
         .await
         .map_err(|e| fetch("root CA CRL", e))?;
     let mut chains: Vec<&str> = vec![&tcb_chain, &qe_chain];
@@ -299,10 +324,17 @@ async fn fetch_early(
     pcs_base_url: &str,
     fmspc_hex: &str,
 ) -> Result<(String, String, String, String), String> {
-    let (tb, tc) = fetch_pcs_collateral(&tcb::pcs_tcb_url(pcs_base_url, fmspc_hex))
+    let tcb_url = tcb::pcs_tcb_url(pcs_base_url, fmspc_hex);
+    let qe_url = tcb::pcs_qe_identity_url(pcs_base_url);
+    let mut abreast = crate::abreast::Abreast::new();
+    let t = abreast.start(fetch_pcs_collateral(&tcb_url));
+    let q = abreast.start(fetch_pcs_collateral(&qe_url));
+    let (tb, tc) = abreast
+        .read(t)
         .await
         .map_err(|e| format!("early tcbInfo not fetched: {e:#}"))?;
-    let (qb, qc) = fetch_pcs_collateral(&tcb::pcs_qe_identity_url(pcs_base_url))
+    let (qb, qc) = abreast
+        .read(q)
         .await
         .map_err(|e| format!("early QE identity not fetched: {e:#}"))?;
     Ok((tb, tc, qb, qc))

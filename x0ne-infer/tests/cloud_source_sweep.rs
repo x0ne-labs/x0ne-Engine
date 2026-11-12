@@ -1548,3 +1548,180 @@ fn the_shipped_binaries_and_test_release_share_one_profile() {
         "{refusal}"
     );
 }
+
+/// `source` without its comments, strings and char literals.
+fn code_only(source: &str) -> String {
+    let code = code_mask(source);
+    let kept: Vec<u8> = source
+        .bytes()
+        .zip(code)
+        .filter_map(|(b, is_code)| is_code.then_some(b))
+        .collect();
+    String::from_utf8_lossy(&kept).into_owned()
+}
+
+/// SECURITY (time padding): every answer leaves on sizes of one tick,
+/// `stream::TICK`, one second at least (`padding::MIN_TICKS`); the host reads
+/// no shorter time. The unit tests of the crate that assert no time serve at
+/// a shorter tick (`padding::Tick::SHORT`) so that they do not wait a second
+/// a request. In shipped code `padding::Tick` has no field and one value,
+/// its period is the constant, and what waits reads it: no flag, variable or
+/// configuration field reaches it. (The cadence of a sealed stream is the
+/// session's, from its signed config: `e2e_stream`, another matter.)
+///
+/// A failure means a tick other than the constant is reachable outside
+/// `cfg(test)`: remove it, or put it back under `cfg(test)`.
+#[test]
+fn the_padding_tick_is_the_constant_outside_cfg_test() {
+    let flat = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let block = |body: &str, head: &str| {
+        let start = body.find(head).unwrap_or_else(|| panic!("no `{head}`"));
+        let rest = &body[start..];
+        rest[..rest.find("\n}\n").expect("closing brace")].to_string()
+    };
+    let stream = shipped("stream.rs");
+    let padding = shipped("padding.rs");
+    assert!(
+        stream.contains("\npub const TICK: Duration = Duration::from_millis(100);\n"),
+        "stream::TICK is no longer 100 ms"
+    );
+    assert!(
+        padding.contains("\npub const MIN_TICKS: u64 = 10;\n"),
+        "padding::MIN_TICKS is no longer 10"
+    );
+
+    // The type: no field, one literal, a period that is the constant.
+    assert!(
+        flat(&padding).contains("pub struct Tick { }"),
+        "padding::Tick has a field outside cfg(test)"
+    );
+    let tick = inherent_impl(&padding, "Tick");
+    assert_eq!(tick.matches("fn ").count(), 2, "period and floor: {tick}");
+    assert_eq!(self_literals(&tick), 1, "{tick}");
+    assert!(
+        flat(&tick).contains("pub const PRODUCTION: Self = Self { };"),
+        "{tick}"
+    );
+    assert!(
+        flat(&tick).contains("pub const fn period(self) -> Duration { crate::stream::TICK }"),
+        "{tick}"
+    );
+    assert!(
+        flat(&tick).contains("self.period() .saturating_mul("),
+        "{tick}"
+    );
+    assert!(!tick.contains("Duration::from"), "{tick}");
+
+    // What holds a tick hands out production's.
+    let server = shipped("server.rs");
+    assert!(
+        !block(&server, "pub struct Serving {").contains("tick:"),
+        "server::Serving carries a tick outside cfg(test)"
+    );
+    assert!(
+        flat(&server).contains(
+            "pub(crate) fn tick(&self) -> crate::padding::Tick { crate::padding::Tick::PRODUCTION }"
+        ),
+        "server::Serving::tick"
+    );
+    assert!(
+        flat(&block(&padding, "impl Default for Turns {")).contains("tick: Tick::PRODUCTION,"),
+        "padding::Turns::default"
+    );
+    assert!(
+        flat(&stream).contains(
+            "pub fn ticking(tick: crate::padding::Tick) -> Self { \
+             Self::every(Instant::now(), tick.period()) }"
+        ),
+        "stream::Clock::ticking"
+    );
+
+    // What waits reads the tick, and nothing else gives it a period.
+    for (file, f, wait) in [
+        (
+            "server.rs",
+            "whole_refused",
+            "sleep_until(asked + tick.floor())",
+        ),
+        (
+            "e2e_gateway.rs",
+            "at_floor",
+            "sleep_until(asked + tick.floor())",
+        ),
+    ] {
+        let body = shipped(file);
+        let start = body
+            .find(&format!("fn {f}("))
+            .unwrap_or_else(|| panic!("{file}: no fn {f}"));
+        let end = start + body[start..].find("\n}\n").expect("closing brace");
+        assert!(body[start..end].contains(wait), "{file} {f}");
+    }
+    let lib = shipped("lib.rs");
+    let mut files = Vec::new();
+    sources(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        "",
+        &mut files,
+    );
+    files.sort();
+    let (mut swept, mut releases, mut clocks) = (0, 0, Vec::new());
+    for file in &files {
+        // A module `lib.rs` declares under `cfg(test)` is no shipped code.
+        let module = file.strip_suffix(".rs").unwrap_or(file);
+        let declared = module.contains('/')
+            || ["lib", "main"].contains(&module)
+            || lib.contains(&format!("mod {module};"));
+        if !declared {
+            continue;
+        }
+        swept += 1;
+        let body = code_only(&shipped(file));
+        for test_only in ["Tick::SHORT", ".ticking(", "Turns::every("] {
+            assert!(!body.contains(test_only), "{file}: {test_only} is shipped");
+        }
+        if file != "padding.rs" {
+            // `Tick {` after a path is a literal, unless a signature returns it.
+            for (at, _) in body.match_indices("Tick {") {
+                let path = body[..at]
+                    .trim_end_matches(|c: char| c.is_alphanumeric() || c == '_' || c == ':');
+                assert!(
+                    ["-> ", "struct ", "impl ", "for "]
+                        .iter()
+                        .any(|before| path.ends_with(before)),
+                    "{file} builds a Tick"
+                );
+            }
+            assert!(!body.contains("MIN_TICKS") || file == "stream.rs", "{file}");
+        }
+        if !["padding.rs", "stream.rs"].contains(&file.as_str()) {
+            assert!(
+                !body.contains("stream::TICK"),
+                "{file} reads stream::TICK and not a padding::Tick"
+            );
+        }
+        for (at, _) in body.match_indices("release_after(") {
+            if body[..at].ends_with("fn ") {
+                continue;
+            }
+            let call = &body[at..at + body[at..].find(';').expect("a statement")];
+            assert!(call.contains(".period())"), "{file}: {call}");
+            releases += 1;
+        }
+        if body.contains("Clock::every(") {
+            clocks.push(file.as_str());
+        }
+    }
+    assert!(swept > 60, "{swept} shipped sources swept");
+    assert_eq!(
+        releases, 3,
+        "release_after: a turn, a stream, a sealed panic"
+    );
+    // The sealed stream's, at its session's cadence.
+    assert_eq!(clocks, ["e2e_gateway.rs"]);
+    for file in ["padding.rs", "stream.rs", "serving_lease.rs"] {
+        let body = code_only(&shipped(file));
+        for read in ["env::", "var(", "var_os("] {
+            assert!(!body.contains(read), "{file} reads {read}");
+        }
+    }
+}

@@ -159,7 +159,7 @@ measure() {
   local tree; tree=$(tree_id "$STAGE")
   lock_build
   sync_src "$STAGE" "$COV_SRC"; rm -rf "$STAGE"
-  started=$(date -Is); t0=$SECONDS
+  started=$(date -u -Is); t0=$SECONDS
   clog "run $short on $branch, tree $tree, image $COV_IMG, features $features, logs $rundir"
   set +e
   # /src as an overlay (:O), thrown away at exit: a child started with env_clear() writes its
@@ -206,7 +206,7 @@ measure() {
   REPORT=$COV_OUT/$id.json
   jq -n --arg status "$status" --arg commit "$sha" --arg short "$short" --argjson dirty "$([ "$dirty" = 1 ] && echo true || echo false)" \
      --arg source "$([ "${CI_WORKTREE:-0}" = 1 ] && echo worktree || echo commit)" --arg branch "$branch" --arg tree "$tree" \
-     --arg started "$started" --arg ended "$(date -Is)" --argjson duration "$dur" --argjson total "$((SECONDS - t_all))" \
+     --arg started "$started" --arg ended "$(date -u -Is)" --argjson duration "$dur" --argjson total "$((SECONDS - t_all))" \
      --argjson wait "$LOCK_WAIT" --arg image "$COV_IMG" --arg features "$features" --arg log "$rundir" \
      --rawfile st "$rundir/status.env" --slurpfile sum "$rundir/summary.json" --slurpfile cmp "$rundir/compare.json" \
      --argjson measured "$measured" --arg failed "$(printf '%s\n' "${failed[@]}")" \

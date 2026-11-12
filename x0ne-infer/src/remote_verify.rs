@@ -229,17 +229,21 @@ pub fn http_date(unix: u64) -> String {
     )
 }
 
+/// An IMF-fixdate's fields are unsigned decimals (`tcb::date_field`):
+/// `str::parse` alone reads a sign, and a year of any length overflows the
+/// day count.
 pub fn parse_http_date(s: &str) -> Option<u64> {
+    use crate::tcb::date_field as digits;
     let (_, rest) = s.trim().split_once(", ")?;
     let mut it = rest.split(' ');
-    let d: i64 = it.next()?.parse().ok()?;
+    let d = digits(it.next()?, 2)?;
     let month = it.next()?;
     let m = MONTHS.iter().position(|x| *x == month)? as i64 + 1;
-    let y: i64 = it.next()?.parse().ok()?;
+    let y = digits(it.next()?, 4)?;
     let mut t = it.next()?.split(':');
-    let hh: i64 = t.next()?.parse().ok()?;
-    let mm: i64 = t.next()?.parse().ok()?;
-    let ss: i64 = t.next()?.parse().ok()?;
+    let hh = digits(t.next()?, 2)?;
+    let mm = digits(t.next()?, 2)?;
+    let ss = digits(t.next()?, 2)?;
     if it.next()? != "GMT"
         || it.next().is_some()
         || !(1..=31).contains(&d)
@@ -433,32 +437,59 @@ pub async fn sdk_collateral(
     let mrtd = x0ne_confidential::tdx_quote::parse(quote)
         .map_err(|e| format!("TDX quote: {e:?}"))?
         .mr_td;
-    let pair = |update| async move {
-        let t = fetch_pcs(http, &crate::tcb::pcs_tcb_url_for(base, fmspc, update)).await;
-        let q = fetch_pcs(http, &crate::tcb::pcs_qe_identity_url_for(base, update)).await;
-        match (t, q) {
-            (Ok(t), Ok(q)) => (t.body, t.chain_pem, q.body, q.chain_pem),
-            _ => Default::default(),
-        }
+    // Seven GETs, none of which waits for another's answer: together, each
+    // read where a serial run read it, so the error is the serial one.
+    let urls = [Early, Standard].map(|update| {
+        (
+            crate::tcb::pcs_tcb_url_for(base, fmspc, update),
+            crate::tcb::pcs_qe_identity_url_for(base, update),
+        )
+    });
+    let pck_crl_url = crate::tcb::pcs_pck_crl_url(base, ca);
+    let mut abreast = crate::abreast::Abreast::new();
+    let [early, standard] = urls.each_ref().map(|(tcb_url, qe_url)| {
+        (
+            abreast.start(fetch_pcs(http, tcb_url)),
+            abreast.start(fetch_pcs(http, qe_url)),
+        )
+    });
+    let pck_crl = abreast.start(fetch_pcs_der(http, &pck_crl_url));
+    let root_crl = abreast.start(fetch_pcs_der(http, &anchors.root_crl_url));
+    let endorsement = abreast.start(crate::gce_endorsement::fetch(
+        http,
+        &anchors.gce_bucket_base_url,
+        &mrtd,
+    ));
+    let pair = |t: Result<Collateral, String>, q: Result<Collateral, String>| match (t, q) {
+        (Ok(t), Ok(q)) => (t.body, t.chain_pem, q.body, q.chain_pem),
+        _ => Default::default(),
     };
-    let (tcb_info, tcb_info_chain_pem, qe_identity, qe_identity_chain_pem) = pair(Early).await;
+    let (tcb_info, tcb_info_chain_pem, qe_identity, qe_identity_chain_pem) =
+        pair(abreast.read(early.0).await, abreast.read(early.1).await);
     let (
         tcb_info_standard,
         tcb_info_standard_chain_pem,
         qe_identity_standard,
         qe_identity_standard_chain_pem,
-    ) = pair(Standard).await;
+    ) = pair(
+        abreast.read(standard.0).await,
+        abreast.read(standard.1).await,
+    );
     let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
-    let pck_crl = fetch_pcs_der(http, &crate::tcb::pcs_pck_crl_url(base, ca))
+    let pck_crl = abreast
+        .read(pck_crl)
         .await
         .map_err(|e| format!("PCK CRL: {e}"))?;
-    let root_crl = fetch_pcs_der(http, &anchors.root_crl_url)
+    let root_crl = abreast
+        .read(root_crl)
         .await
         .map_err(|e| format!("root CA CRL: {e}"))?;
-    let endorsement = crate::gce_endorsement::fetch(http, &anchors.gce_bucket_base_url, &mrtd)
+    let endorsement = abreast
+        .read(endorsement)
         .await
         .map_err(|e| format!("Google endorsement: {e}"))?
         .unwrap_or_default();
+    drop(abreast);
     // The binary the endorsement names, which the SDK measures itself; an
     // endorsement that names none, or a bucket that lacks it, is left empty
     // for the SDK to refuse, as it refuses the endorsement.
@@ -489,15 +520,25 @@ pub async fn sdk_collateral(
     })
 }
 
+/// The two GETs together; the tcbInfo's failure is the one named when both fail.
 async fn fetch_early(
     http: &reqwest::Client,
     base: &str,
     fmspc_hex: &str,
 ) -> Result<(Collateral, Collateral), String> {
-    let t = fetch_pcs(http, &crate::tcb::pcs_tcb_url(base, fmspc_hex))
+    let (tcb_url, qe_url) = (
+        crate::tcb::pcs_tcb_url(base, fmspc_hex),
+        crate::tcb::pcs_qe_identity_url(base),
+    );
+    let mut abreast = crate::abreast::Abreast::new();
+    let t = abreast.start(fetch_pcs(http, &tcb_url));
+    let q = abreast.start(fetch_pcs(http, &qe_url));
+    let t = abreast
+        .read(t)
         .await
         .map_err(|e| format!("early tcbInfo not fetched: {e}"))?;
-    let q = fetch_pcs(http, &crate::tcb::pcs_qe_identity_url(base))
+    let q = abreast
+        .read(q)
         .await
         .map_err(|e| format!("early QE identity not fetched: {e}"))?;
     Ok((t, q))
@@ -603,19 +644,48 @@ pub async fn verify_document(
     let fmspc = crate::tcb::pck_tcb(&quote)
         .map_err(|e| refuse(65, format!("platform identity: {e}")))?
         .fmspc_hex;
-    let tcb = fetch_pcs(
-        http,
-        &crate::tcb::pcs_tcb_url_for(&anchors.pcs_base_url, &fmspc, update),
-    )
-    .await
-    .map_err(|e| refuse(76, format!("Intel PCS unreachable: {e}")))?;
-    // Transparent: Intel's latest (`early`) answer too, named in the verdict;
-    // one that cannot be fetched is said so, not refused.
+    // The quote is Intel's and binds this channel: what is left to fetch
+    // that waits for no other answer is asked for together (tcbInfo, the
+    // `early` pair, both CRLs, Google's endorsement). Each answer is read
+    // below where a serial run fetched it, so the checks keep their order
+    // and a refusal is the serial one; one that refuses drops the GETs not
+    // read yet. The firmware binary waits for the verified endorsement.
+    let ca = crate::tcb::pck_crl_ca(&quote);
+    let tcb_url = crate::tcb::pcs_tcb_url_for(&anchors.pcs_base_url, &fmspc, update);
+    let pck_crl_url = ca
+        .as_ref()
+        .ok()
+        .map(|ca| crate::tcb::pcs_pck_crl_url(&anchors.pcs_base_url, ca));
+    let mut abreast = crate::abreast::Abreast::new();
+    let tcb = abreast.start(fetch_pcs(http, &tcb_url));
     let early = match update {
         crate::tcb::PcsUpdate::Early => None,
         crate::tcb::PcsUpdate::Standard => {
-            Some(fetch_early(http, &anchors.pcs_base_url, &fmspc).await)
+            Some(abreast.start(fetch_early(http, &anchors.pcs_base_url, &fmspc)))
         }
+    };
+    let crl = abreast.start(async {
+        match &pck_crl_url {
+            Some(url) => fetch_pcs_der(http, url).await,
+            // Never read: the CA that names no CRL refuses first, below.
+            None => Err("the PCK names no CRL".to_string()),
+        }
+    });
+    let root_crl = abreast.start(fetch_pcs_der(http, &anchors.root_crl_url));
+    let blob = abreast.start(crate::gce_endorsement::fetch(
+        http,
+        &anchors.gce_bucket_base_url,
+        &claims.mr_td,
+    ));
+    let tcb = abreast
+        .read(tcb)
+        .await
+        .map_err(|e| refuse(76, format!("Intel PCS unreachable: {e}")))?;
+    // Transparent: Intel's latest (`early`) answer too, named in the verdict;
+    // one that cannot be fetched is said so, not refused.
+    let early = match early {
+        None => None,
+        Some(early) => Some(abreast.read(early).await),
     };
     let latest = early.as_ref().map(|r| {
         r.as_ref()
@@ -650,14 +720,11 @@ pub async fn verify_document(
     );
     // The PCK itself: a key extracted from one machine signs genuine-looking
     // quotes (TEE.fail, 2025); Intel revokes it on the PCK CRL.
-    let ca = crate::tcb::pck_crl_ca(&quote)
-        .map_err(|e| refuse(65, format!("platform identity: {e}")))?;
-    let crl = fetch_pcs_der(
-        http,
-        &crate::tcb::pcs_pck_crl_url(&anchors.pcs_base_url, ca),
-    )
-    .await
-    .map_err(|e| refuse(76, format!("Intel PCS unreachable: PCK CRL: {e}")))?;
+    ca.map_err(|e| refuse(65, format!("platform identity: {e}")))?;
+    let crl = abreast
+        .read(crl)
+        .await
+        .map_err(|e| refuse(76, format!("Intel PCS unreachable: PCK CRL: {e}")))?;
     crate::tcb::verify_pck_crl(&quote, &crl, &anchors.tdx, now, &anchors.tcb_policy).map_err(
         |e| match e {
             crate::tcb::TcbRejected::PckRevoked { .. } => refuse(65, format!("TDX quote: {e}")),
@@ -665,7 +732,8 @@ pub async fn verify_document(
         },
     )?;
     // What the root issued, the PCK CA and the TCB signer: Intel's root CA CRL.
-    let root_crl = fetch_pcs_der(http, &anchors.root_crl_url)
+    let root_crl = abreast
+        .read(root_crl)
         .await
         .map_err(|e| refuse(76, format!("Intel root CA CRL unreachable: {e}")))?;
     let mut signer_chains: Vec<&str> = vec![&tcb.chain_pem, &qe.chain_pem];
@@ -694,7 +762,8 @@ pub async fn verify_document(
             ),
         ));
     }
-    let blob = crate::gce_endorsement::fetch(http, &anchors.gce_bucket_base_url, &claims.mr_td)
+    let blob = abreast
+        .read(blob)
         .await
         .map_err(|e| refuse(76, format!("Google endorsement bucket unreachable: {e}")))?
         .ok_or_else(|| {
@@ -2959,6 +3028,36 @@ mod tests {
         assert_eq!(file_stamp(1_760_303_100), "2025-10-12T21-05Z");
         assert_eq!(parse_http_date("Sun, 06 Nov 1994 08:49:37 PST"), None);
         assert_eq!(parse_http_date("garbage"), None);
+    }
+
+    /// A `Date` header is written by the server that answered: a year past
+    /// what the arithmetic holds overflowed it (a panic where overflow is
+    /// checked, another date where it is not), and a signed field was read
+    /// as a time of day.
+    #[test]
+    fn an_http_date_with_a_year_or_a_time_no_clock_shows_is_refused() {
+        for date in [
+            "Thu, 22 Oct 9223372036854775807 07:35:40 GMT",
+            "Thu, 22 Oct 106751991167301 07:35:40 GMT",
+            "Thu, 22 Oct 10000 07:35:40 GMT",
+            "Thu, 22 Oct -2026 07:35:40 GMT",
+            "Thu, 22 Oct +2026 07:35:40 GMT",
+            "Thu, +22 Oct 2026 07:35:40 GMT",
+            "Thu, 22 Oct 2026 -7:35:40 GMT",
+            "Thu, 22 Oct 2026 07:-5:40 GMT",
+            "Thu, 22 Oct 2026 07:35:-9 GMT",
+            "Thu, 22 Oct 2026 +7:35:40 GMT",
+        ] {
+            assert_eq!(parse_http_date(date), None, "{date}");
+        }
+        assert_eq!(
+            parse_http_date("Thu, 22 Oct 2026 07:35:40 GMT"),
+            Some(1_792_654_540)
+        );
+        assert_eq!(
+            parse_http_date("Fri, 31 Dec 9999 23:59:59 GMT"),
+            Some(253_402_300_799)
+        );
     }
 
     #[test]

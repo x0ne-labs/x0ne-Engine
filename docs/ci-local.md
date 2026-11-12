@@ -47,16 +47,31 @@ make coverage-update # raise the baseline to the measure of HEAD
   read-only, the vendored crates and the advisory database read-only, `$CI_CACHE/v2/target`
   and the sccache disk cache read-write (sccache is used when `SCCACHE_BIN`, `sccache` on
   `PATH` by default, and `SCCACHE_DISK`, `$CI_CACHE/sccache` by default, exist). One log per
-  step under `$CI_CACHE/logs/`. The steps run in four lanes at once (`CI_LANES=0`: one
+  step under `$CI_CACHE/logs/`. The steps run in six lanes at once (`CI_LANES=0`: one
   after the other): `fmt ci-sh features deny gitleaks` (no build), `clippy test test-doc`,
-  `clippy-all doc test-all` (in `target/all`) and `test-release build-cloud
-  comment-invariance release-refusal`. `clippy` and `clippy-all` lint as the `clippy` job
+  `clippy-all doc test-all` (in `target/all`), `build-cloud comment-invariance
+  release-refusal` (in `target/release`), `test-release` (in `target/test-release`)
+  and `core` (in `target/core`). A workspace of the tree may add steps of its own to
+  these lanes, and `make` targets: its `ci/steps.sh`, sourced by `ci/inside.sh`, and its
+  `ci/make.mk`, included by the `Makefile`. `core`
+  (`ci/core-cpu.sh`) is the part of `x0ne-core/` that needs no GPU: its lock held to
+  the root one, `x0ne-core/oracle` formatted and linted, the tests of the oracle and of
+  the runtime on `ci/nvcc-stub.sh` (no kernel is compiled; the GPU tests are compiled
+  and listed as ignored), and the same test binaries under AddressSanitizer when the
+  toolchain ships its runtime. The GPU half is `make core-gpu`. `clippy` and `clippy-all` lint as the `clippy` job
   of `.github/workflows/ci.yml` does: `-D warnings`, then its `PEDANTIC` list
   (`clippy::pedantic` minus the lints it allows), read from the commit by
   `ci/clippy-pedantic.sh`, so the two CIs share one list; a list the script cannot read
   (no single `PEDANTIC: >-` block, a word outside `-W|-A|-D clippy::<lint>` pairs, a
   first pair other than `-W clippy::pedantic`) fails the step. `test-release` runs the
-  tests in the profile that ships (`--release`, `target/release`).
+  tests in the profile that ships (`--release`), in a target directory of its own,
+  `target/test-release`: `x0ne-sdk` is a `cdylib`, which Cargo writes without a hash in its
+  file name, so its build with the tests' `test-anchor` feature and its build without it
+  replaced each other in `target/release`, and each replacement rebuilt `x0ne-infer`, on
+  every run, with no source changed (measured 2026-11-10). `test`, `test-all` and
+  `test-release` run each test binary through `ci/test-runner.sh` (cargo's runner), which
+  has libtest print the time of each test and prints the CPU time of the binary, both in
+  the step's log; `RUSTC_BOOTSTRAP=1` is set for the test binary alone.
   `build-cloud` is the client build of [cloud.md](cloud.md#building), with its
   `x0ne-engine cloud --help`. `comment-invariance` (`ci/comment-invariance.sh`)
   builds the binaries of the `.deb` packages as `make deb` does (profile
@@ -82,7 +97,11 @@ make coverage-update # raise the baseline to the measure of HEAD
   duration and exit code, `tree`: a hash of the files tested, `lock_wait_s`),
   `out/ci/<sha>+dirty.json` instead when `CI_WORKTREE=1` finds changes
   (`"dirty": true`), `out/ci/latest.json` and one journal line
-  (`journalctl -t engine-ci`). `CI_NOTIFY_CMD`, when set, is run after each
+  (`journalctl -t engine-ci`). A run named by `CI_VERDICT_NAME=<name>` (lowercase
+  letters, digits, dashes), a run that is not `make ci`, writes
+  `out/ci/<sha>.<name>.json` and `out/ci/latest.<name>.json` instead, never the files
+  of `make ci`, which `make deb` reads; `ci/ci.sh status`
+  reads the latest of that name. `CI_NOTIFY_CMD`, when set, is run after each
   verdict as `<cmd> ci|deb <green|red> <short sha> <seconds> <detail>`, the
   detail being the failed steps (`ci`) or the packages (`deb`); its failure
   does not change the verdict. Nothing else notifies.
@@ -95,11 +114,14 @@ The settings of one host (cache disk, lock, cgroup, sccache, `X0NE_OS`,
 `X0NE_OS` keys. The file is read, not run, and the environment wins over it.
 
 Steps and their commands are in `ci/inside.sh`; `CI_STEPS="fmt clippy"`
-restricts a run (the lanes keep the requested steps in their order). `ci-sh` runs `ci/tests/ci-sh.sh`: `ci/ci.sh` against fake
-`podman`, `df` and `jq` in a throwaway repository (no build, no network), then
+restricts a run (the lanes keep the requested steps in their order). A run whose steps all
+build nothing (`fmt`, `ci-sh`, `features`, `deny`, `gitleaks`) takes no build lock and mounts
+no target: its staged tree is the source, removed after it. `ci-sh` runs `ci/tests/ci-sh.sh`: `ci/ci.sh` against fake
+`podman`, `df` and `jq` in a throwaway repository (no build, no network) and
+`ci/test-runner.sh` on a fake test binary, then
 `ci/tests/release-verify-tag.sh`: the tag verification step of `.github/workflows/release.yml`
 against a fake `gh api` and the image's `jq` (by hand without `jq` it skips; under
-`ci/inside.sh`, `X0NE_REQUIRE_JQ=1`, it fails).
+`ci/inside.sh`, `X0NE_REQUIRE_JQ=1`, it fails), and `ci/tests/coverage.sh`.
 Before any container, `ci/ci.sh` requires `CI_MIN_DISK_GB` (150) free on `/`
 and on the filesystems of `CI_CACHE`, `DEB_TARGET` and `DEB_STAGING`
 (all under `CI_CACHE` by default). The per-feature test matrix (nvml, ...) stays

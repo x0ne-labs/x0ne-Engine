@@ -25,6 +25,8 @@
 //! limitations verbatim (`verifier` string); read them rather than this
 //! paragraph, which can drift.
 
+/// Futures run abreast and read in a fixed order (a verdict's collateral).
+pub mod abreast;
 /// The request table of the OpenAI surface, played against the four routers.
 #[cfg(test)]
 mod api_contract_tests;
@@ -38,6 +40,12 @@ pub mod argv;
 pub mod attest_v2;
 pub mod backend;
 pub mod backends;
+/// make bench's client and its statistics, for `bench_tests` (`scripts/bench.sh`).
+#[cfg(test)]
+mod bench_load_tests;
+/// make bench's server tiers and its llama.cpp baseline, on a GPU (`scripts/bench.sh`).
+#[cfg(test)]
+mod bench_tests;
 pub mod binding;
 /// candle on the CPU, the reference of the tests (`candle-reference`).
 #[cfg(feature = "candle-reference")]
@@ -95,10 +103,29 @@ pub mod fsread;
 pub mod gate;
 /// Google launch endorsements: the MRTD signed by Google.
 pub mod gce_endorsement;
+/// Properties of generation: schemas, prompts, stops, streams and sampling.
+#[cfg(test)]
+mod generation_prop_tests;
 /// The TD process: not dumpable, no core file; keys out of swap and dumps.
 pub mod harden;
+/// Whole-file hash passes, counted in tests only.
+mod hash_passes;
 /// Hex decoding of untrusted input, re-exported by `cloud_config`.
 mod hex;
+/// The harness of the hostile-bytes suites, shared with the other crates.
+#[cfg(test)]
+#[path = "../../x0ne-sdk/tests/support/hostile.rs"]
+mod hostile;
+/// Hostile bytes against the binary formats a third party hands this crate.
+#[cfg(test)]
+mod hostile_bytes_tests;
+/// The harness's mutations of a JSON document.
+#[cfg(test)]
+#[path = "../../x0ne-sdk/tests/support/hostile_json.rs"]
+mod hostile_json;
+/// Hostile bytes against the textual formats a third party hands this crate.
+#[cfg(test)]
+mod hostile_text_tests;
 /// HPKE (RFC 9180), base mode, one message: the model key's envelope to a TD.
 pub mod hpke;
 /// HTTP bodies read against a cap as they arrive.
@@ -139,6 +166,9 @@ pub mod padding;
 pub mod pcs;
 /// Chat prompts: the template's control markers apart from the messages' text.
 pub mod prompt;
+/// Seeded property testing by hand: generators, a JSON reader, scripted models.
+#[cfg(test)]
+mod prop_kit_tests;
 /// Qwen3 on candle, forked for an in-place KV cache: the reference of the tests.
 #[cfg(feature = "candle-reference")]
 pub mod qwen3;
@@ -158,6 +188,9 @@ pub mod run_fixtures;
 pub mod sampler;
 pub mod seal;
 pub mod server;
+/// Properties of the HTTP service: admission, hang-ups, sizes.
+#[cfg(test)]
+mod service_prop_tests;
 /// The key lease on two clocks, judged when a computation starts.
 pub mod serving_lease;
 pub mod shards;

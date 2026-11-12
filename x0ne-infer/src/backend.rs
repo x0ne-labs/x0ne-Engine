@@ -84,7 +84,9 @@ pub struct Completion {
     pub text: String,
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
-    /// `text` ends where a stop sequence began; the sequence is not in it.
+    /// `text` ends where a stop sequence began, the sequence not in it, or
+    /// where its schema's document closed: on the last token of the budget
+    /// too, which the count of tokens alone reads as a cut.
     pub stopped: bool,
     /// The generation used its whole budget: `max_tokens`, or fewer when that
     /// is all the context window left. Compared with `max_tokens` alone, a cut
@@ -124,6 +126,13 @@ pub struct JsonSchemaUnsupported(pub String);
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("x0ne.conversation: this model keeps no conversation between requests; refused rather than ignored")]
 pub struct ConversationUnsupported;
+
+/// Messages in an order the model's own chat template raises on (a
+/// conversation that starts with an assistant message, for one): a 400, not a
+/// prompt the model was never trained on.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("messages: {0}; refused rather than rendered into a prompt the model was not trained on")]
+pub struct ChatRefused(pub String);
 
 /// `text` up to the earliest stop sequence it contains, and whether one was.
 pub fn cut_at_stop(text: &str, stop: &[String]) -> (String, bool) {
@@ -320,6 +329,21 @@ pub trait LoadedModel: Send + Sync {
             // generate() does not say its budget: finish_reason reads max_tokens.
             length: false,
         })
+    }
+    /// [`Self::generate_with`] for a caller who may leave before the answer:
+    /// `sink.alive()` says, at every step, whether anyone still waits for it
+    /// (`Err(Cancelled)` once nobody does). The text is the completion's;
+    /// what `sink` is handed of it on the way is not read. This default
+    /// cannot stop: it generates to the end. A backend that decodes step by
+    /// step answers with its streaming loop.
+    fn generate_whole(
+        &self,
+        prompt: &Prompt,
+        params: &GenerationParams,
+        sink: &mut dyn TokenSink,
+    ) -> anyhow::Result<Completion> {
+        let _ = sink;
+        self.generate_with(prompt, params)
     }
     /// [`Self::generate_with`], handing the text to `sink` as it is final.
     /// This default refuses first, then hands out the whole text at once.
@@ -691,6 +715,17 @@ mod digest_tests {
         let (status, message) = crate::server::generate_error(e);
         assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{message}");
         assert!(message.contains("temperature"), "{message}");
+    }
+
+    /// Messages the model's template refuses are the caller's error, a 400
+    /// that says why, not a 500.
+    #[test]
+    fn a_conversation_the_template_refuses_is_a_400() {
+        let e: anyhow::Error =
+            ChatRefused("the conversation starts with an assistant".into()).into();
+        let (status, message) = crate::server::generate_error(e);
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{message}");
+        assert!(message.contains("starts with an assistant"), "{message}");
     }
 
     /// Every split of `text` into pieces at char boundaries.

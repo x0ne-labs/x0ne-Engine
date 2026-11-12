@@ -3,7 +3,7 @@
   "tolerance_pt": 0.2,
   "about": "make coverage: red when a crate loses more than tolerance_pt points of lines or regions (percent). make coverage-update raises it.",
   "measured": {
-    "date": "2026-11-04T15:23:01+01:00",
+    "date": "2026-11-04T14:23:01+00:00",
     "toolchain": "rustc 1.98.1 (48a229cea 2026-09-01)",
     "llvm": "22.1.8-rust-1.98.1-stable",
     "features": "x0ne-infer/nvml,x0ne-infer/probe"

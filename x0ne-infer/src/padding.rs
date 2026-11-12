@@ -67,6 +67,61 @@ pub fn pad_json(mut body: Vec<u8>) -> Vec<u8> {
     body
 }
 
+/// The period of the time padding, as the code that pads holds it. Outside
+/// this crate's own unit tests it has no field and no constructor but
+/// [`Tick::PRODUCTION`]: its period is [`crate::stream::TICK`], which no
+/// flag, variable or configuration changes. The unit tests of this crate
+/// that assert nothing about time serve at `Tick::SHORT`, so that a table
+/// of refusals does not wait one real second a row;
+/// `tests/cloud_source_sweep.rs` holds every other value under `cfg(test)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Tick {
+    #[cfg(test)]
+    period: Duration,
+}
+
+impl Tick {
+    /// [`crate::stream::TICK`]: what every server built from this crate pads at.
+    pub const PRODUCTION: Self = Self {
+        #[cfg(test)]
+        period: crate::stream::TICK,
+    };
+
+    /// A twentieth of [`crate::stream::TICK`], for unit tests that assert no
+    /// time, no number of frames and no size of ticks.
+    #[cfg(test)]
+    pub(crate) const SHORT: Self = Self {
+        period: Duration::from_millis(5),
+    };
+
+    /// One tick.
+    #[cfg(not(test))]
+    #[must_use]
+    pub const fn period(self) -> Duration {
+        crate::stream::TICK
+    }
+
+    /// One tick.
+    #[cfg(test)]
+    #[must_use]
+    pub const fn period(self) -> Duration {
+        self.period
+    }
+
+    /// [`MIN_TICKS`] ticks: when a refusal leaves, after its request.
+    #[must_use]
+    pub fn floor(self) -> Duration {
+        self.period()
+            .saturating_mul(u32::try_from(MIN_TICKS).unwrap_or(u32::MAX))
+    }
+}
+
+impl Default for Tick {
+    fn default() -> Self {
+        Self::PRODUCTION
+    }
+}
+
 /// How long after its request a whole answer that took `elapsed` leaves:
 /// `elapsed` rounded up to whole ticks, then to a size of at least
 /// [`MIN_TICKS`]; past [`MAX_TICKS`], the whole ticks only, so that the
@@ -86,23 +141,44 @@ pub fn release_after(elapsed: Duration, tick: Duration) -> Duration {
 /// ticks after it. An answer queued behind another starts when that turn
 /// ends, so its start tells the host the other's time to within a size, not
 /// to the token, as it would if it started when the model freed up.
-pub struct Turns(std::sync::Arc<tokio::sync::Semaphore>);
+pub struct Turns {
+    one: std::sync::Arc<tokio::sync::Semaphore>,
+    tick: Tick,
+}
 
 impl Default for Turns {
     fn default() -> Self {
-        Self(std::sync::Arc::new(tokio::sync::Semaphore::new(1)))
+        Self {
+            one: std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
+            tick: Tick::PRODUCTION,
+        }
     }
 }
 
 impl Turns {
+    /// Turns that end on sizes of `tick`.
+    #[cfg(test)]
+    pub(crate) fn every(tick: Tick) -> Self {
+        Self {
+            tick,
+            ..Self::default()
+        }
+    }
+
+    /// The tick its turns end on sizes of.
+    pub fn tick(&self) -> Tick {
+        self.tick
+    }
+
     /// The next turn, once the one before has ended.
     pub async fn take(&self) -> Turn {
-        let permit = self.0.clone().acquire_owned().await.ok();
+        let permit = self.one.clone().acquire_owned().await.ok();
         Turn {
             permit,
             held: Vec::new(),
             since: tokio::time::Instant::now(),
             ends: None,
+            tick: self.tick,
         }
     }
 }
@@ -115,6 +191,7 @@ pub struct Turn {
     held: Vec<tokio::sync::OwnedSemaphorePermit>,
     since: tokio::time::Instant,
     ends: Option<tokio::time::Instant>,
+    tick: Tick,
 }
 
 impl Turn {
@@ -129,10 +206,10 @@ impl Turn {
     /// began, [`MIN_TICKS`] at least, fixed the first time it is asked, and
     /// asked at the latest when the turn is dropped.
     pub fn ends(&mut self) -> tokio::time::Instant {
-        let since = self.since;
+        let (since, tick) = (self.since, self.tick);
         *self
             .ends
-            .get_or_insert_with(|| since + release_after(since.elapsed(), crate::stream::TICK))
+            .get_or_insert_with(|| since + release_after(since.elapsed(), tick.period()))
     }
 
     /// Ends the turn at `at`, unless its end was fixed already.

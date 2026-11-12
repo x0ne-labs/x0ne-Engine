@@ -371,6 +371,61 @@ fn what_is_not_signed_is_named() {
     none_says(&["**the reference values are measured once and not signed**"]);
 }
 
+/// A request that names no token budget gets the server's default: the API
+/// page says that number.
+#[test]
+fn the_default_token_budget_is_the_one_the_api_page_names() {
+    let request = flat(&read("x0ne-infer/src/openai/request.rs"));
+    let default = request
+        .split("fn default_max_tokens() -> usize { ")
+        .nth(1)
+        .and_then(|rest| rest.split(' ').next())
+        .expect("request.rs: default_max_tokens");
+    assert!(default.parse::<usize>().is_ok(), "{default}");
+    let api = flat(&read("docs/api.md"));
+    assert!(
+        api.contains(&format!("neither: {default} tokens")),
+        "docs/api.md does not say that a request without max_completion_tokens gets {default}"
+    );
+}
+
+/// x0ne Core takes the trait's default `generate_turn`, which refuses a
+/// conversation: while it does, the API page says so before it describes one.
+#[test]
+fn a_conversation_is_not_described_as_served_while_core_keeps_none() {
+    let mut core = read("x0ne-infer/src/core_backend.rs");
+    let dir = workspace().join("x0ne-infer/src/core_backend");
+    for e in std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display())) {
+        let p = e.expect("entry").path();
+        if p.extension().is_some_and(|x| x == "rs") {
+            core.push_str(&std::fs::read_to_string(&p).expect("a source of core_backend"));
+        }
+    }
+    if core.contains("fn generate_turn") {
+        return;
+    }
+    let api = flat(&read("docs/api.md"));
+    let section = api
+        .split("### `x0ne.conversation`")
+        .nth(1)
+        .expect("docs/api.md: the x0ne.conversation section");
+    let first = section.split_once(" between turns ").map(|(_, text)| text);
+    assert!(
+        first.is_some_and(|text| text.starts_with("**not served in this version.**")),
+        "docs/api.md describes x0ne.conversation before saying x0ne Core refuses it"
+    );
+}
+
+/// `up` cannot delete the VM when it is killed (`chaos.rs` kills it and finds
+/// the VM): no title says every ending deletes it.
+#[test]
+fn a_killed_up_is_not_said_to_delete_its_vm() {
+    if !read("x0ne-engine-cloud/tests/chaos.rs").contains("fn killed_while_serving()") {
+        return;
+    }
+    none_says(&["every way it ends deletes the vm"]);
+}
+
 /// The members of the root Cargo.toml's `[workspace]`, in order.
 fn workspace_members(cargo_toml: &str) -> Vec<String> {
     toml_list(cargo_toml, "members = [").expect("Cargo.toml: workspace members")

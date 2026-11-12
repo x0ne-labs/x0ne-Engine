@@ -144,11 +144,47 @@ impl From<(StatusCode, String)> for ApiError {
     }
 }
 
+/// What the reader of a request body gets when the body was not whole in
+/// time (`crate::server::BODY_TIMEOUT`); a 408 once it reaches [`ApiError`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BodyLate(pub std::time::Duration);
+
+impl std::fmt::Display for BodyLate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the request body was not whole {} seconds after its head",
+            self.0.as_secs()
+        )
+    }
+}
+
+impl std::error::Error for BodyLate {}
+
+impl BodyLate {
+    /// The [`BodyLate`] `e` or one of its sources is, if any: axum wraps a
+    /// body's error in its rejection.
+    fn within(e: &(dyn std::error::Error + 'static)) -> Option<Self> {
+        let mut at = Some(e);
+        while let Some(e) = at {
+            if let Some(late) = e.downcast_ref::<Self>() {
+                return Some(*late);
+            }
+            at = e.source();
+        }
+        None
+    }
+}
+
 impl From<JsonRejection> for ApiError {
     /// Malformed JSON 400, a body that is not JSON's shape 422, no JSON
     /// content type 415: axum's status and sentence, in this shape, its
-    /// JSON path cut by [`quoted`].
+    /// JSON path cut by [`quoted`]. A body that was not whole in time
+    /// ([`BodyLate`]) 408, its own sentence.
     fn from(e: JsonRejection) -> Self {
+        if let Some(late) = BodyLate::within(&e) {
+            return Self::new(StatusCode::REQUEST_TIMEOUT, late.to_string());
+        }
         let text = match e {
             JsonRejection::JsonSyntaxError(_) | JsonRejection::JsonDataError(_) => {
                 path_cut(&e.body_text())

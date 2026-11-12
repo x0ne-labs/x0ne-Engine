@@ -578,11 +578,11 @@ order = 48
 since = "2026-10-22"
 hardware_since = "2026-10-22"
 version = "0.2.0-beta.7"
-title_en = "Several clients at once, rehearsed on hardware"
-sentence_en = "A confidential VM served 49 requests from concurrent clients through the relay, 256 tokens in 3.70 to 3.75 s, for 0.66 USD."
+title_en = "Up to three requests at once, rehearsed on hardware"
+sentence_en = "A confidential VM served 49 requests from one client through the relay, up to three at once, 256 tokens in 3.70 to 3.75 s."
 figure = "49 requests, 0.66 USD"
 proof = "docs/hardware-runs.md 2026-10-22 (rehearsal, qwen3:8b)"
-limit = "No hardware run recorded with more than 3 concurrent clients or more than one client per session. Run with the engine before x0ne Core."
+limit = "No hardware run recorded with more than 3 concurrent requests or more than one client per session; the VM generates one answer at a time, the others wait. Run with the engine before x0ne Core."
 
 # ---------------------------------------------------------------- local
 

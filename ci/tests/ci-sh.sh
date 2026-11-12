@@ -80,7 +80,9 @@ fi
 sc=no; [ -n "${m[/sccache]:-}" ] && sc=yes
 case $script in
   /ci/inside.sh)
-    src=${m[/src]} t=${m[/target]} built=no
+    src=${m[/src]} t=${m[/target]:-} built=no
+    # No target mounted: steps that build nothing.
+    if [ -z "$t" ]; then echo "inside.sh src=$src target=none built=no" >> "$FAKE_RUNS"; printf 'fmt\tok\t0\t0\n' > "${m[/out]}/steps.tsv"; exit 0; fi
     if [ ! -e "$t/.built" ] || [ "$src/probe.txt" -nt "$t/.built" ]; then
       cat "$src/probe.txt" > "$t/.binary" 2>/dev/null || : > "$t/.binary"; touch "$t/.built"; built=yes
     fi
@@ -342,6 +344,22 @@ git clone -q "$REPO" "$T/elsewhere/clone"
 hold 4; AT=$T/elsewhere/clone EXTRA="CI_WAIT_MAX=1" ci run; wait "$holder" || true
 if [ "$RC" = 2 ] && [ -z "$(find "$T/elsewhere" -name '*build.lock' -print -quit)" ]; then pass "a clone elsewhere takes the shared lock"
 else fail "a clone elsewhere takes the shared lock" "exit $RC, $(tail -n 2 <<<"$OUT" | tr '\n' ' ')"; fi
+# Steps that build nothing (fmt ci-sh features deny gitleaks) do not wait for the lock: they run
+# from their own staged copy, never from the source copy or the target that make ci builds in.
+for s in fmt ci-sh features deny gitleaks; do
+  hold 4; EXTRA="CI_WAIT_MAX=1 CI_STEPS=$s" ci run; wait "$holder" || true
+  src=$(sed -n 's/^inside.sh src=\([^ ]*\) .*/\1/p' "$T/runs.log")
+  if [ "$RC" = 0 ] && ! grep -q "waiting for" <<<"$OUT" && [ -n "$src" ] && [ "$src" != "$CI_CACHE/v2/src" ] \
+    && ! grep -q -- "-v $CI_CACHE/v2/target:/target" "$T/podman.log"; then pass "CI_STEPS=$s runs at once beside a held lock, off the shared source and target"
+  else fail "CI_STEPS=$s runs at once beside a held lock, off the shared source and target" "exit $RC, src $src, $(tail -n 2 <<<"$OUT" | tr '\n' ' ')"; fi
+  if [ -n "$src" ] && [ ! -e "$src" ]; then pass "CI_STEPS=$s: its staged copy is removed after"
+  else fail "CI_STEPS=$s: its staged copy is removed after" "$src is still there"; fi
+done
+for s in clippy test doc; do
+  hold 4; EXTRA="CI_WAIT_MAX=1 CI_STEPS=$s" ci run; wait "$holder" || true
+  if [ "$RC" = 2 ] && grep -q "build lock" <<<"$OUT" && ! ran_podman_run; then pass "CI_STEPS=$s, which builds, still waits for the lock"
+  else fail "CI_STEPS=$s, which builds, still waits for the lock" "exit $RC, $(tail -n 2 <<<"$OUT" | tr '\n' ' ')"; fi
+done
 
 # ---- one verdict per tree, from any worktree. probe.txt stands for a source file: the fake
 # inside.sh rebuilds when it is newer than the last build (cargo's rule) and is red when it says red.
@@ -410,6 +428,28 @@ else fail "run builds with line-tables-only debug info" "$(grep inside.sh "$T/po
 EXTRA="CI_DEBUGINFO=2" ci run
 if grep -q -- '-e CARGO_PROFILE_DEV_DEBUG=2 ' "$T/podman.log"; then pass "CI_DEBUGINFO=2 restores full debug info"
 else fail "CI_DEBUGINFO=2 restores full debug info" "$(grep inside.sh "$T/podman.log")"; fi
+
+# ---- a run named by CI_VERDICT_NAME has its own verdict, <sha>.<name>.json and
+# latest.<name>.json: it never replaces the <sha>.json and latest.json of make ci, which make deb
+# and ci/ci.sh status read.
+V=$T/wt-c/out/ci
+echo full > "$V/$PROBE.json"
+AT=$T/wt-c EXTRA="CI_VERDICT_NAME=export-1 CI_STEPS=fmt" ci run
+if [ "$RC" = 0 ] && [ -s "$V/$PROBE.export-1.json" ] && [ "$(readlink "$V/latest.export-1.json")" = "$PROBE.export-1.json" ] \
+  && grep -q "$V/$PROBE.export-1.json" <<<"$OUT"; then pass "a named run writes <sha>.<name>.json and latest.<name>.json"
+else fail "a named run writes <sha>.<name>.json and latest.<name>.json" "exit $RC, $(ls "$V" | tr '\n' ' ')"; fi
+if [ "$(cat "$V/$PROBE.json")" = full ] && [ "$(verdict "$T/wt-c")" = "$PROBE.json" ]; then pass "a named run leaves make ci's verdict and latest.json"
+else fail "a named run leaves make ci's verdict and latest.json" "$PROBE.json: $(cat "$V/$PROBE.json"), latest $(verdict "$T/wt-c")"; fi
+AT=$T/wt-c EXTRA="CI_VERDICT_NAME=export-1" ci status
+if [ "$RC" = 0 ] && grep -q "jq .*$V/latest.export-1.json" "$T/podman.log"; then pass "status with CI_VERDICT_NAME reads latest.<name>.json"
+else fail "status with CI_VERDICT_NAME reads latest.<name>.json" "exit $RC, $(grep '^jq' "$T/podman.log" | tr '\n' ' ')"; fi
+for bad in ../x Public a/b; do
+  before=$(ls "$V" | tr '\n' ' ')
+  AT=$T/wt-c EXTRA="CI_STEPS=fmt CI_VERDICT_NAME=$bad" ci run
+  if [ "$RC" = 2 ] && [ "$(ls "$V" | tr '\n' ' ')" = "$before" ] && ! ran_podman_run; then pass "CI_VERDICT_NAME=$bad is refused, nothing run or written"
+  else fail "CI_VERDICT_NAME=$bad is refused, nothing run or written" "exit $RC, $(ls "$V" | tr '\n' ' ')"; fi
+done
+rm -f "$V/$PROBE.export-1.json" "$V/latest.export-1.json"
 
 # ---- run-fixtures: its inputs are required; a different set reaches the tree only with RUN_WRITE=1.
 echo '{}' > "$T/att.json"; echo '{}' > "$T/ref.json"
@@ -515,9 +555,66 @@ pedantic_refuses "a lint name with a shell character" '      PEDANTIC: >-\n     
 rc=0; bash "$CP" "$T/no-such.yml" > /dev/null 2>&1 || rc=$?
 if [ "$rc" = 2 ]; then pass "clippy-pedantic refuses a missing file"; else fail "clippy-pedantic refuses a missing file" "exit $rc"; fi
 
+# has <name> <text> <line>: the text has the exact line; hasnt: the text does not hold the string.
+has() { if grep -qxF -- "$3" <<< "$2"; then pass "$1"; else fail "$1" "no line '$3' in: $(tr '\n' '|' <<< "$2")"; fi; }
+hasnt() { if grep -qF -- "$3" <<< "$2"; then fail "$1" "'$3' in: $(tr '\n' '|' <<< "$2")"; else pass "$1"; fi; }
+
+# ---- ci/test-runner.sh: libtest prints the time of each test; RUSTC_BOOTSTRAP reaches the test
+# binary alone. A fake test binary prints its arguments and the variable.
+printf '#!/bin/sh\necho "args=$*"\necho "bootstrap=${RUSTC_BOOTSTRAP:-unset}"\nexit 3\n' > "$T/fake-test"; chmod +x "$T/fake-test"
+set +e; out=$(env -u RUSTC_BOOTSTRAP bash "$SRC/ci/test-runner.sh" "$T/fake-test" --exact a::b 2>&1); rc=$?; set -e
+has "test-runner: the binary gets cargo's arguments, then --report-time" "$out" "args=--exact a::b -Z unstable-options --report-time"
+has "test-runner: under RUSTC_BOOTSTRAP=1, which a stable libtest needs for it" "$out" "bootstrap=1"
+if [ "$rc" = 3 ]; then pass "test-runner: the exit code of the test binary"; else fail "test-runner exit" "rc=$rc"; fi
+if grep -qxE "test-runner: user [0-9]+\.[0-9]{3} s, sys [0-9]+\.[0-9]{3} s, wall [0-9]+\.[0-9]{3} s: $T/fake-test" <<< "$out"; then
+  pass "test-runner: then the CPU time of the binary and what it started"; else fail "test-runner cpu" "$out"; fi
+# The three test steps of make ci run under it, through cargo's runner; no other command sets
+# RUSTC_BOOTSTRAP for a build (rustc and the build scripts would see a nightly compiler).
+for s in test test-all test-release; do
+  line=$(grep -E "^ +$s\) +step $s " "$SRC/ci/inside.sh")
+  if grep -q '"$TEST_RUNNER"' <<< "$line"; then pass "inside.sh: step $s runs its tests through the runner"; else fail "inside.sh $s runner" "$line"; fi
+done
+has "inside.sh: the runner is cargo's runner of the host" "$(grep -E '^TEST_RUNNER=' "$SRC/ci/inside.sh")" \
+  'TEST_RUNNER=CARGO_TARGET_$(rustc -vV | sed -n '"'"'s/^host: //p'"'"' | tr '"'"'a-z.-'"'"' '"'"'A-Z__'"'"')_RUNNER="bash /src/ci/test-runner.sh"'
+hasnt "inside.sh: RUSTC_BOOTSTRAP is set by no step itself" "$(grep -v '^ *#' "$SRC/ci/inside.sh")" "RUSTC_BOOTSTRAP"
+
+# ---- ci/ci.sh reuse_verdict: the verdict of the same tree, same image, young enough, on request.
+# The settings of the run around this test (a make ci with CI_STEPS="ci-sh") are not the case's.
+RCACHE=$T/reuse-cache
+mkdir -p "$RCACHE/verdicts"
+reuse() { # reuse <env...>: 0 when a verdict is reused for tree t1
+  (cd "$REPO" && rm -f out/ci/reused.json && env -u CI_STEPS -u CI_RANGE -u CI_ALL_FEATURES -u CI_REUSE CI_ENV_FILE="$T/none" CI_CACHE="$RCACHE" CI_LOCK="$T/reuse-lock" HOME="$T/home" "$@" bash -c '
+    . ci/ci.sh; reuse_verdict t1 "$(git rev-parse HEAD)" main 0 reused' > /dev/null 2>&1)
+}
+RIMG=localhost/x0ne-engine-ci:$(sha256sum "$REPO/ci/Containerfile" | cut -c1-12)
+tree_verdict() { # tree_verdict <image> <ended>
+  jq -n --arg image "$1" --arg ended "$2" '{status: "green", sha: "abc1234def", short: "abc1234", tree: "t1", image: $image,
+    ended: $ended, failed: [], log_dir: "/logs/x", steps: [{name: "fmt", status: "ok", seconds: 1, exit: 0}]}' > "$RCACHE/verdicts/t1.json"
+}
+tree_verdict "$RIMG" "$(date -Is)"
+if reuse; then fail "reuse: off by default" "a verdict was reused"; else pass "reuse: off by default, every make ci runs"; fi
+if reuse CI_REUSE=1 && [ "$(jq -r '[.reused_from.short, .steps[0].reused, .duration_s, .sha == .reused_from.sha] | join(" ")' "$REPO/out/ci/reused.json")" = "abc1234 true 0 false" ]; then
+  pass "reuse: CI_REUSE=1 takes the green verdict of the same tree and names it"; else fail "reuse on request" "$(cat "$REPO/out/ci/reused.json" 2>&1 | head -c 300)"; fi
+if reuse CI_REUSE=1 CI_STEPS="fmt clippy"; then fail "reuse: partial" "reused with CI_STEPS"; else pass "reuse: never for a run of some steps"; fi
+if reuse CI_REUSE=1 CI_RANGE=a..b; then fail "reuse: range" "reused with CI_RANGE"; else pass "reuse: never with a commit range to scan"; fi
+tree_verdict "localhost/x0ne-engine-ci:000000000000" "$(date -Is)"
+if reuse CI_REUSE=1; then fail "reuse: image" "reused across images"; else pass "reuse: not the verdict of another image"; fi
+tree_verdict "$RIMG" "$(date -Is -d '2 days ago')"
+if reuse CI_REUSE=1; then fail "reuse: age" "reused a verdict of two days"; else pass "reuse: not a verdict older than CI_REUSE_MAX_AGE"; fi
+jq '.status = "red" | .failed = ["test"]' "$RCACHE/verdicts/t1.json" > "$RCACHE/verdicts/t1.json.tmp"; mv "$RCACHE/verdicts/t1.json.tmp" "$RCACHE/verdicts/t1.json"
+if reuse CI_REUSE=1; then fail "reuse: red" "reused a red verdict"; else pass "reuse: never a red verdict"; fi
+
 # ---- repro-compare: two build trees, byte for byte (its own cases).
 if bash "$SRC/ci/tests/repro-compare.sh" > "$T/repro-compare.log" 2>&1; then pass "repro-compare: $(tail -n 1 "$T/repro-compare.log")"
 else fail "repro-compare" "$(grep FAIL "$T/repro-compare.log" | tr '\n' ' ')"; fi
+
+# ---- core-gpu: the verdict file of make core-gpu, its gate and the performance ratchet (their own cases).
+if bash "$SRC/ci/tests/core-gpu.sh" > "$T/core-gpu.log" 2>&1; then pass "core-gpu: $(tail -n 1 "$T/core-gpu.log")"
+else fail "core-gpu" "$(grep FAIL "$T/core-gpu.log" | cut -c1-300 | tr '\n' ' ')"; fi
+
+# ---- bench: make bench's verdict, report and reference (their own cases, a fake runner).
+if bash "$SRC/ci/tests/bench.sh" > "$T/bench.log" 2>&1; then pass "bench: $(tail -n 1 "$T/bench.log")"
+else fail "bench" "$(grep FAIL "$T/bench.log" | cut -c1-300 | tr '\n' ' ')"; fi
 
 # ---- strip-release, deb-verify, deb-pack, release-guards, release-notes: the strip of the shipped binaries, the
 # check of the .deb, the .deb of a GitHub release, the build environment and the release refusal

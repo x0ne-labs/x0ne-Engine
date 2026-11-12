@@ -1,0 +1,21 @@
+[package]
+name = "x0ne-core-oracle"
+description = "CPU reference of every kernel and of the Qwen3 dense forward (plain loops, f64 inside), written in x0ne Engine, and the tests of its copy of x0ne Core."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dev-dependencies]
+half.workspace = true
+safetensors.workspace = true
+serde_json.workspace = true
+x0ne-core-kernels = { path = "../kernels" }
+x0ne-core-runtime = { path = "../runtime" }
+
+# The core tier of make bench (scripts/bench.sh); its unit tests run with the oracle's.
+[[example]]
+name = "core-bench"
+test = true

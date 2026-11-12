@@ -1931,3 +1931,263 @@ fn a_redirect_is_judged_as_the_source_itself() {
         assert!(!e.contains("secret"), "{to}: {e}");
     }
 }
+
+// One hash pass over the weights before the attestation: the catalog check and
+// the served digest read the same pass over the same mapping.
+
+/// A served model nobody else hashes: two shards whose tensors come from `tag`,
+/// so `hash_passes` counts this test's passes only.
+fn counted_files(tag: &str) -> HashMap<String, Vec<u8>> {
+    use safetensors::tensor::TensorView;
+    use safetensors::Dtype;
+    let data = |n: u8| -> Vec<u8> {
+        Sha256::digest(format!("{tag}/{n}"))
+            .iter()
+            .cycle()
+            .take(4096)
+            .copied()
+            .collect()
+    };
+    let (a, b) = (data(1), data(2));
+    let shard = |name: &str, bytes: &[u8]| {
+        let view = TensorView::new(Dtype::U8, vec![bytes.len()], bytes).unwrap();
+        safetensors::serialize([(name, view)], None).unwrap()
+    };
+    let mut files = model_files();
+    files.remove("model.safetensors");
+    files.insert("model-00001-of-00002.safetensors".into(), shard("a", &a));
+    files.insert("model-00002-of-00002.safetensors".into(), shard("b", &b));
+    files.insert(
+        crate::shards::INDEX_FILE.into(),
+        br#"{"weight_map":{"a":"model-00001-of-00002.safetensors","b":"model-00002-of-00002.safetensors"}}"#
+            .to_vec(),
+    );
+    files
+}
+
+fn pinned(files: &HashMap<String, Vec<u8>>, name: &str) -> Entry {
+    let mut e = entry_for(files, name);
+    e.digest_sha256 = Some(e.catalog_digest().unwrap());
+    e
+}
+
+/// Hash passes over each weight file of `e` so far.
+fn weight_passes(e: &Entry) -> Vec<usize> {
+    e.weight_files()
+        .map(|f| crate::hash_passes::of(&f.sha256))
+        .collect()
+}
+
+/// A new download: each weight file is hashed once before the TD attests, on
+/// the mapping it serves; that pass is the catalog check and the served digest.
+#[tokio::test]
+async fn cloud_intake_hashes_downloaded_weights_once() {
+    let files = counted_files("downloaded-once");
+    let e = pinned(&files, "m:2");
+    let fx = fixture(files.clone(), Mode::Honest).await;
+    assert_eq!(weight_passes(&e), [0, 0]);
+    let served = pull_served(&fx.store, &fx.source, &e, &mut Quiet)
+        .await
+        .unwrap();
+    assert_eq!(
+        weight_passes(&e),
+        [1, 1],
+        "passes over each downloaded shard"
+    );
+    assert_eq!(served.digest_hex, e.catalog_digest().unwrap());
+    let dir = fx.store.model_dir("m", "2");
+    assert_eq!(served.digest_hex, coreutils_pin(&dir, &e));
+    for (n, bytes) in &served.weight_files().files {
+        assert_eq!(*bytes, &files[*n][..], "{n}");
+    }
+    let i = fx.store.installed("m", "2").unwrap().unwrap();
+    assert!(i.record.matches(&e));
+    fx.store.verify(&i).unwrap();
+    assert_eq!(
+        std::fs::read_dir(fx.store.root.join("partial"))
+            .unwrap()
+            .count(),
+        0
+    );
+    assert_eq!(std::fs::read_dir(fx.store.staging()).unwrap().count(), 0);
+}
+
+/// A restart over an installed model: one pass again, and no request.
+#[tokio::test]
+async fn cloud_intake_hashes_installed_weights_once() {
+    let files = counted_files("installed-once");
+    let e = pinned(&files, "m:2");
+    let fx = fixture(files.clone(), Mode::Honest).await;
+    pull(&fx.store, &fx.source, &e, &mut Quiet).await.unwrap();
+    let (before, gets) = (weight_passes(&e), fx.hub.seen.lock().unwrap().gets);
+    let served = pull_served(&fx.store, &fx.source, &e, &mut Quiet)
+        .await
+        .unwrap();
+    let after = weight_passes(&e);
+    assert_eq!(
+        [after[0] - before[0], after[1] - before[1]],
+        [1, 1],
+        "passes over each installed shard"
+    );
+    assert_eq!(fx.hub.seen.lock().unwrap().gets, gets, "no request");
+    assert_eq!(served.digest_hex, e.catalog_digest().unwrap());
+    for (n, bytes) in &served.weight_files().files {
+        assert_eq!(*bytes, &files[*n][..], "{n}");
+    }
+}
+
+/// The mapping handed to the loader is the installed file: a write to it after
+/// the intake shows in the mapped bytes, so the digest taken at load (pass 3,
+/// `served_digest` in the backend) no longer is the one promised.
+#[tokio::test]
+async fn the_mapping_served_is_the_installed_file_after_a_download_and_a_restart() {
+    use std::os::unix::fs::FileExt;
+    const S1: &str = "model-00001-of-00002.safetensors";
+    for restart in [false, true] {
+        let files = counted_files(&format!("mapping-{restart}"));
+        let e = pinned(&files, "m:2");
+        let fx = fixture(files.clone(), Mode::Honest).await;
+        if restart {
+            pull(&fx.store, &fx.source, &e, &mut Quiet).await.unwrap();
+        }
+        let served = pull_served(&fx.store, &fx.source, &e, &mut Quiet)
+            .await
+            .unwrap();
+        let digest = |s: &Served| {
+            crate::model_spec::served_digest(&s.config_json, &s.tokenizer_json, &s.weight_files())
+                .unwrap()
+        };
+        assert_eq!(digest(&served), served.digest_hex, "restart {restart}");
+        let path = fx.store.model_dir("m", "2").join(S1);
+        let at = files[S1].len() as u64 - 1;
+        let f = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        f.write_all_at(&[files[S1][at as usize] ^ 1], at).unwrap();
+        assert_ne!(digest(&served), served.digest_hex, "restart {restart}");
+    }
+}
+
+/// Bytes altered during the download: refused (96, the pull's integrity error),
+/// nothing installed, nothing kept.
+#[tokio::test]
+async fn cloud_intake_refuses_weights_altered_in_transit() {
+    use safetensors::tensor::TensorView;
+    let data = [7u8; 64];
+    let view = TensorView::new(safetensors::Dtype::U8, vec![64], &data).unwrap();
+    let mut files = model_files();
+    // Mode::Corrupt flips a byte of this file.
+    files.insert(
+        "model.safetensors".into(),
+        safetensors::serialize([("in-transit", view)], None).unwrap(),
+    );
+    let e = pinned(&files, "m:1");
+    let fx = fixture(files, Mode::Corrupt).await;
+    let (code, why) = pull_served(&fx.store, &fx.source, &e, &mut Quiet)
+        .await
+        .err()
+        .expect("served altered weights");
+    assert_eq!(code, 96, "{why}");
+    assert!(why.contains("does not match the catalog"), "{why}");
+    assert!(why.contains("the download was deleted"), "{why}");
+    assert!(!fx.store.model_dir("m", "1").exists());
+    assert!(fx.store.list().is_empty());
+    let w = e.weight_files().next().unwrap();
+    assert!(!fx.store.partial(&w.sha256).exists(), "bad bytes are kept");
+    assert!(!fx.store.partial_ranges(&w.sha256).exists());
+    assert_eq!(std::fs::read_dir(fx.store.staging()).unwrap().count(), 0);
+    // As after any failed pull: the files that passed wait in partial/.
+    let config = e.files.iter().find(|f| f.path == "config.json").unwrap();
+    assert!(fx.store.partial(&config.sha256).exists());
+}
+
+/// Bytes altered after the download, before the install: a complete partial
+/// of the right size and other bytes is hashed, refused and deleted, with and
+/// without byte ranges.
+#[tokio::test]
+async fn cloud_intake_refuses_a_complete_partial_of_other_bytes() {
+    const S1: &str = "model-00001-of-00002.safetensors";
+    const S2: &str = "model-00002-of-00002.safetensors";
+    let in_ranges = Transfer {
+        chunk: 1024,
+        ..ranged(2, 4, 2)
+    };
+    for transfer in [None, Some(in_ranges)] {
+        let files = counted_files(&format!("poisoned-{}", transfer.is_some()));
+        let e = pinned(&files, "m:2");
+        let fx = fixture_with(
+            files.clone(),
+            Mode::Honest,
+            Opts {
+                transfer,
+                ..Opts::default()
+            },
+        )
+        .await;
+        let w = e.files.iter().find(|f| f.path == S2).unwrap();
+        let mut bad = files[S2].clone();
+        *bad.last_mut().unwrap() ^= 1;
+        std::fs::create_dir_all(fx.store.root.join("partial")).unwrap();
+        std::fs::write(fx.store.partial(&w.sha256), &bad).unwrap();
+        let (code, why) = pull_served(&fx.store, &fx.source, &e, &mut Quiet)
+            .await
+            .err()
+            .expect("served a poisoned partial");
+        assert_eq!(code, 96, "{why}");
+        assert!(why.contains("does not match the catalog"), "{why}");
+        assert!(!fx.store.partial(&w.sha256).exists());
+        assert!(fx.store.list().is_empty(), "installed");
+        assert_eq!(std::fs::read_dir(fx.store.staging()).unwrap().count(), 0);
+        // The next start downloads that shard, and only it, and serves.
+        let gets = |f: &str| fx.hub.seen.lock().unwrap().by_file.get(f).copied();
+        let (s1, s2) = (gets(S1), gets(S2));
+        assert_eq!(s2, None, "the poisoned shard was complete: no request");
+        let served = pull_served(&fx.store, &fx.source, &e, &mut Quiet)
+            .await
+            .unwrap();
+        assert_eq!(served.digest_hex, e.catalog_digest().unwrap());
+        assert_eq!(gets(S1), s1, "the other shard was fetched again");
+        assert!(gets(S2).is_some());
+        for (n, bytes) in &served.weight_files().files {
+            assert_eq!(*bytes, &files[*n][..], "{n}");
+        }
+    }
+}
+
+/// Bytes altered after the install, in a weight file or a small one: a restart
+/// does not serve them. With the source there the copy is replaced; without it
+/// the TD refuses (96).
+#[tokio::test]
+async fn cloud_intake_never_serves_an_install_altered_since() {
+    for name in ["model-00002-of-00002.safetensors", "tokenizer.json"] {
+        let files = counted_files(&format!("altered-{name}"));
+        let e = pinned(&files, "m:2");
+        let fx = fixture(files.clone(), Mode::Honest).await;
+        pull_served(&fx.store, &fx.source, &e, &mut Quiet)
+            .await
+            .unwrap();
+        let path = fx.store.model_dir("m", "2").join(name);
+        let alter = || {
+            let mut bytes = files[name].clone();
+            *bytes.last_mut().unwrap() ^= 1;
+            std::fs::write(&path, bytes).unwrap();
+        };
+
+        alter();
+        let gone = Source::new("http://127.0.0.1:9").unwrap();
+        let (code, why) = pull_served(&fx.store, &gone, &e, &mut Quiet)
+            .await
+            .err()
+            .unwrap_or_else(|| panic!("{name}: served altered bytes"));
+        assert_eq!(code, 96, "{name}: {why}");
+
+        alter();
+        let served = pull_served(&fx.store, &fx.source, &e, &mut Quiet)
+            .await
+            .unwrap();
+        assert_eq!(served.digest_hex, e.catalog_digest().unwrap(), "{name}");
+        assert_eq!(std::fs::read(&path).unwrap(), files[name], "{name}");
+        assert_eq!(served.tokenizer_json, files["tokenizer.json"]);
+        for (n, bytes) in &served.weight_files().files {
+            assert_eq!(*bytes, &files[*n][..], "{n}");
+        }
+    }
+}

@@ -8,13 +8,16 @@ that quotes nothing of it, and every answer names the id served), `messages` (ea
 message is `role` and `content`, a string; the content is text: a special
 token's string typed in it, such as `<|im_end|>`, is tokenized as text and
 never as that token, since 2026-10-26, `docs/models.md`), `max_completion_tokens` or its
-deprecated alias `max_tokens` (two different values: 400), `temperature` (0 to
+deprecated alias `max_tokens` (two different values: 400; neither: 256
+tokens, a default of this server, so an answer may end at 256 tokens with
+`finish_reason: "length"`), `temperature` (0 to
 2; 0 or absent decodes greedily, where OpenAI's default is 1), `top_p` (0 to 1),
 `seed` (drawn from `/dev/urandom` when sampling without one), `stop` (a string
 or up to 4, each at most 256 bytes: the answer ends before the first one met,
 `finish_reason: "stop"`), `response_format` (`text` or `json_schema`, below)
 and `x0ne` (`conversation` and `end_conversation`,
-[below](#x0neconversation-a-conversations-keys-and-values-kept-between-turns)). Greedy decoding
+[below](#x0neconversation-a-conversations-keys-and-values-kept-between-turns);
+x0ne Core, the engine served, refuses `conversation` with a 400). Greedy decoding
 draws nothing, so without a `temperature` above 0 a `top_p` below 1 or any
 `seed` gets a 400 that names it. `n` is accepted only at `1`. `stream: true`
 answers OpenAI's `chat.completion.chunk` events, the receipt on the final
@@ -41,7 +44,11 @@ in the model's turn, and the turn ends at that same size of ticks after it
 began, counted when the generation ends, an error's included. The answer's
 queue place comes back only when its turn ends: an answer asked while
 another runs starts then, and a full queue's 503s stop then, not when the
-model frees up, so neither tells how long the other ran. With
+model frees up, so neither tells how long the other ran. A caller who
+closes the TD's connection stops its generation at the next token, a whole
+answer's as a stream's, and one who left before its turn has no prompt
+read; the turn still ends on a size of ticks, ten at least, and nothing is
+signed. With
 `--max-queue 0`, a request sent as a stream ends may get a 503 until that
 stream's turn ends. None of this can be turned off. The aim is that the
 VM's host sees neither the size nor the timing of the tokens, and the
@@ -117,7 +124,10 @@ error of `/v1/chat/completions` that names part of the request is padded
 as a whole answer's, its status and message kept: a whole answer's, a
 stream's before its 200, and a body axum's JSON extractor rejects (400 for
 a body that is not valid JSON, its message naming where the JSON broke,
-413 past axum's 2 MiB body limit, 415 without a JSON content type). A full
+413 past axum's 2 MiB body limit, 415 without a JSON content type), and
+a body that is not whole 30 s after the request took its queue place, which
+the head takes before the body is read (408; the place is free again and the
+connection is closed). A full
 queue, a full set of open streams and a foreign `Host` leave at once,
 their sentences set by the server. An error quotes at most 64 bytes of a
 field name or JSON path of the request, cut on a character, so that none
@@ -181,7 +191,11 @@ only when the decoder writes a token's text whatever its neighbours: a
 400 naming it, before the model runs. The table of the vocabulary's
 bytes is read once per loaded model, at the first request that asks: 79 to
 104 ms for Qwen3-0.6B's 151,669 ids (release build, Ryzen 9 7900X under
-other builds, 2026-10-30). x0ne Core reads it again for each such request.
+other builds, 2026-10-30), before the request waits for the engine. It
+holds the vocabulary alone, nothing of a request: a schema and its automaton
+live as long as their request. On 2026-11-10, same machine under other
+builds: 88 to 92 ms a read (median of 20, three runs), 20 ns for a later
+request, and 7.1 MB asked of the allocator for the life of the model.
 A mask then took 144 µs on average and 343 µs at worst over 83 steps on the
 same machine, on the CPU, between two tokens. The approach is the one of
 llguidance (github.com/guidance-ai/llguidance) and XGrammar (arXiv
@@ -213,15 +227,26 @@ and device only.
 
 ### `x0ne.conversation`: a conversation's keys and values kept between turns
 
+**Not served in this version.** x0ne Core, which serves every model of the
+catalog, keeps no conversation: a request with `conversation` gets the 400
+below, on both routes
+([limitations.md](limitations.md#conversations-kept-between-turns)). A
+conversation of several turns is served without it: the client sends every
+message at each turn, and each turn is computed from token 0. The one
+backend that keeps a conversation is candle, the engine before x0ne Core:
+since 2026-11-04 it is the reference of the tests only (feature
+`candle-reference`), which no served build links. It kept one on hardware on
+2026-10-31 ([session-kv-cache.md](session-kv-cache.md)). The rest of this
+section describes the protocol as the TD's routes, the relay and x0ne-sdk
+implement it, for a backend that keeps a conversation.
+
 Read since 2026-10-30, on the TD's two routes (`/v1/chat/completions` and
 the sealed `/v2/e2e/chat`), whole and streamed. Without it, a request is
 served as before: its cache is zeroed at its end and the next request
-computes its prompt from token 0. With it, the TD keeps the keys and values
+computes its prompt from token 0. With it, on a backend that keeps
+conversations, the TD keeps the keys and values
 of one conversation between its turns, and a turn computes only the part of
 its prompt that the previous turn did not: the new message, as a rule.
-In this version no model keeps one: x0ne Core, which serves every model of
-the catalog, answers a request with `conversation` with the 400 below
-([limitations.md](limitations.md#conversations-kept-between-turns)).
 
 - `"x0ne": {"conversation": "new"}` opens a conversation. The answer
   carries `"x0ne": {"conversation": {"handle": "<64 hex digits>"}}`, in a

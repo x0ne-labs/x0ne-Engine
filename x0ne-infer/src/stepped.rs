@@ -101,6 +101,47 @@ pub fn table_for(
         .map_err(JsonSchemaUnsupported)
 }
 
+/// A model's token table, read from its tokenizer at the first `json_schema`
+/// request and kept for the next ones (79 ms a read for Qwen3's 151,669 ids,
+/// measured 2026-10-30). Why it could not be read is kept too, as text.
+///
+/// It keeps nothing of a request: the one call that fills it, [`Self::read`],
+/// takes the tokenizer and the end tokens, and a [`TokenTable`] holds bytes
+/// and ids of the vocabulary alone. A schema and its automaton stay in the
+/// request ([`Constraint`] borrows the table and is dropped with the answer).
+#[derive(Default)]
+pub struct TableCache(std::sync::OnceLock<Result<TokenTable, String>>);
+
+impl TableCache {
+    /// The table of `tokenizer`, read at the first call and kept: the same
+    /// for every later call, which must name the same model.
+    pub fn read(
+        &self,
+        tokenizer: &Tokenizer,
+        eos_ids: &[u32],
+    ) -> Result<&TokenTable, JsonSchemaUnsupported> {
+        self.0
+            .get_or_init(|| TokenTable::from_tokenizer(tokenizer, eos_ids))
+            .as_ref()
+            .map_err(|e| JsonSchemaUnsupported(e.clone()))
+    }
+
+    /// [`table_for`], read once: `None` without a schema, and the refusals of
+    /// [`table_for`] before any device.
+    pub fn get(
+        &self,
+        tokenizer: &Tokenizer,
+        eos_ids: &[u32],
+        params: &GenerationParams,
+    ) -> Result<Option<&TokenTable>, JsonSchemaUnsupported> {
+        if params.json_schema.is_none() {
+            return Ok(None);
+        }
+        refuse_stop(params)?;
+        self.read(tokenizer, eos_ids).map(Some)
+    }
+}
+
 /// A stop sequence would cut a document: refused beside a schema, as the
 /// request parser refuses it.
 pub fn refuse_stop(params: &GenerationParams) -> Result<(), JsonSchemaUnsupported> {
@@ -138,10 +179,8 @@ pub fn prepare(
     })
 }
 
-/// Generates `req` through the session `open` returns, called after
-/// `sink.started()` with the prompt's ids. `eos_ids` end the answer. Under a
-/// `json_schema`, the token table is read from `tokenizer` per request
-/// (79 ms for Qwen3's 151,669 ids, measured 2026-10-30).
+/// [`run_with_table`] over a token table read from `tokenizer` for this
+/// request ([`table_for`]): for a caller that keeps no [`TableCache`].
 pub fn run<S: LogitsSession>(
     tokenizer: &Tokenizer,
     eos_ids: &[u32],
@@ -151,10 +190,31 @@ pub fn run<S: LogitsSession>(
     open: impl FnOnce(&[u32]) -> anyhow::Result<S>,
 ) -> anyhow::Result<Completion> {
     let table = table_for(tokenizer, eos_ids, params)?;
+    run_with_table(tokenizer, eos_ids, table.as_ref(), req, params, sink, open)
+}
+
+/// Generates `req` through the session `open` returns, called after
+/// `sink.started()` with the prompt's ids. `eos_ids` end the answer. `table`
+/// is the model's token table when `params` asks a `json_schema`
+/// ([`TableCache::get`], [`table_for`]); a schema without it is refused.
+pub fn run_with_table<S: LogitsSession>(
+    tokenizer: &Tokenizer,
+    eos_ids: &[u32],
+    table: Option<&TokenTable>,
+    req: &Prepared,
+    params: &GenerationParams,
+    sink: &mut dyn TokenSink,
+    open: impl FnOnce(&[u32]) -> anyhow::Result<S>,
+) -> anyhow::Result<Completion> {
+    if params.json_schema.is_some() && table.is_none() {
+        return Err(
+            JsonSchemaUnsupported("json_schema: no token table for this model".into()).into(),
+        );
+    }
     let mut constraint = params
         .json_schema
         .as_ref()
-        .zip(table.as_ref())
+        .zip(table)
         .map(|(schema, table)| Constraint::new(schema, table, eos_ids));
     let mut sampler = params.sampling.map(Sampler::new);
     // Every refusal is past: the 200 may go before the prefill.
@@ -225,11 +285,16 @@ pub fn run<S: LogitsSession>(
     let text = tokenizer
         .decode(&generated, true)
         .map_err(|e| anyhow::anyhow!("decode: {e}"))?;
-    let (text, stopped) = crate::backend::cut_at_stop(&text, &params.stop);
+    let (mut text, stopped) = crate::backend::cut_at_stop(&text, &params.stop);
+    let joins = constraint.as_ref().is_none_or(|c| c.joins_to(&text));
+    // A character the budget cut is left out: see `Constraint::text`.
+    if let Some(c) = constraint.as_ref().filter(|_| joins) {
+        text.truncate(c.text().len());
+    }
     let Some(rest) = text.strip_prefix(emitted.as_str()) else {
         return Err(NotPrefixStable.into());
     };
-    if constraint.as_ref().is_some_and(|c| !c.joins_to(&text)) {
+    if !joins {
         anyhow::bail!("json_schema: the decoded text is not the bytes the mask let through");
     }
     if !rest.is_empty() && sink.delta(rest).is_break() {
@@ -239,7 +304,7 @@ pub fn run<S: LogitsSession>(
         text,
         prompt_tokens: req.prompt_ids.len() as u32,
         completion_tokens: generated.len() as u32,
-        stopped,
+        stopped: stopped || closed,
         length: !closed && generated.len() >= req.max_tokens,
     })
 }
@@ -431,6 +496,28 @@ pub(crate) mod tests {
         drop(l);
         let log = Rc::try_unwrap(log).unwrap().into_inner();
         (out, log)
+    }
+
+    /// A model's token table is read at the first schema request and kept:
+    /// the second request gets the same table, a request without a schema
+    /// reads none, and a stop sequence beside a schema is still refused.
+    #[test]
+    fn a_models_token_table_is_read_once() {
+        let tk = crate::constrain::tests::byte_level_bpe();
+        let cache = TableCache::default();
+        let plain = GenerationParams::greedy(4);
+        assert!(cache.get(&tk, &[], &plain).unwrap().is_none());
+        assert!(cache.0.get().is_none(), "read without a schema");
+        let mut asked = GenerationParams::greedy(4);
+        asked.json_schema = Some(
+            crate::json_schema::JsonSchema::compile(&serde_json::json!({"type": "string"}))
+                .unwrap(),
+        );
+        let first: *const TokenTable = cache.get(&tk, &[], &asked).unwrap().unwrap();
+        let second: *const TokenTable = cache.get(&tk, &[], &asked).unwrap().unwrap();
+        assert!(std::ptr::eq(first, second), "the table was read twice");
+        asked.stop = vec!["x".into()];
+        assert!(cache.get(&tk, &[], &asked).is_err());
     }
 
     /// The prompt opens the session, each chosen token is fed back but the

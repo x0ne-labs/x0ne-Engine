@@ -1298,7 +1298,7 @@ fn verify_crl(
             ark.ark.subject()
         )));
     }
-    if tbs.signature != crl.signature_algorithm {
+    if !crate::pcs::signature_algorithm_repeated(crl.as_raw()) {
         return Err(bad("the signed and the outer algorithms differ".into()));
     }
     // SECURITY: the issuer NAME proves nothing; the ARK's signature is the
@@ -1423,7 +1423,7 @@ fn signed_by(
             "{what}: outside its validity window [{not_before}, {not_after}] at {now}"
         ));
     }
-    if cert.tbs_certificate.signature != cert.signature_algorithm {
+    if !crate::pcs::signature_algorithm_repeated(cert.as_raw()) {
         return Err(format!(
             "{what}: the signed and the outer algorithms differ"
         ));
@@ -2485,6 +2485,66 @@ pub(crate) mod tests {
             matches!(&e, SnpRejected::Vlek(_) | SnpRejected::Chain(_)),
             "{e}"
         );
+    }
+
+    /// RFC 5280, sections 4.1.1.2 and 5.1.1.2, byte for byte, on AMD's real
+    /// Genoa ARK and CRL: one bit of the algorithm after the signed part
+    /// changed, the two tags x509-parser does not read included, and neither
+    /// is taken.
+    #[test]
+    fn amds_ark_and_crl_with_one_bit_of_the_outer_algorithm_changed_are_refused() {
+        /// Where the outer `AlgorithmIdentifier` is: after the signed part.
+        fn outer(der: &[u8], tbs: &[u8]) -> std::ops::Range<usize> {
+            let at = tbs.as_ptr() as usize - der.as_ptr() as usize + tbs.len();
+            assert_eq!(der[at], 0x30);
+            assert!(der[at + 1] < 0x80, "a short length");
+            at..at + 2 + usize::from(der[at + 1])
+        }
+        let anchors = SnpAnchors::production();
+        let root = anchors.root(SnpProduct::Genoa).unwrap();
+        let ark = verify_ark(root, NOW_REAL).expect("AMD's Genoa ARK, intact");
+        let (inter, _) = verify_intermediate(root, &ark, SnpSigningKey::Vcek, NOW_REAL).unwrap();
+        let crl = |der: &[u8]| {
+            verify_crl(
+                der,
+                SnpProduct::Genoa,
+                &ark,
+                "ASK",
+                inter.raw_serial(),
+                NOW_REAL,
+            )
+        };
+        crl(AMD_GENOA_CRL).expect("AMD's Genoa CRL, intact");
+
+        let mut parsed = 0;
+        let at = outer(root.ark_der, ark.ark.tbs_certificate.as_ref());
+        for (byte, bit) in at.flat_map(|byte| (0..8).map(move |bit| (byte, bit))) {
+            let mut m = root.ark_der.to_vec();
+            m[byte] ^= 1 << bit;
+            let Ok((_, c)) = X509Certificate::from_der(&m) else {
+                continue;
+            };
+            parsed += 1;
+            let e = signed_by(&c, &ark.key, "ARK", NOW_REAL)
+                .expect_err("an ARK with one bit of its outer algorithm changed verifies");
+            assert!(
+                e.contains("algorithms differ"),
+                "byte {byte} bit {bit}: {e}"
+            );
+        }
+        assert!(parsed >= 2, "x509-parser reads {parsed} of them");
+
+        let (_, intact) = CertificateRevocationList::from_der(AMD_GENOA_CRL).unwrap();
+        let at = outer(AMD_GENOA_CRL, intact.tbs_cert_list.as_ref());
+        for (byte, bit) in at.flat_map(|byte| (0..8).map(move |bit| (byte, bit))) {
+            let mut m = AMD_GENOA_CRL.to_vec();
+            m[byte] ^= 1 << bit;
+            let e = crl(&m).expect_err("a CRL with one bit of its outer algorithm changed passes");
+            assert!(
+                matches!(e, SnpRejected::Crl(_)),
+                "byte {byte} bit {bit}: {e}"
+            );
+        }
     }
 
     // ── Revocation: AMD's CRL ───────────────────────────────────────────

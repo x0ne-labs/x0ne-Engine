@@ -126,6 +126,9 @@ fn every_live_tcb_path_reads_the_pck_crl() {
         "attest_v2.rs",
         "main.rs",
         "tcb_standing.rs",
+        // A test module, no path of a verdict: it mutates Intel's answers
+        // under `verify_live`, and the two CRLs in the test after it.
+        "hostile_bytes_tests.rs",
     ];
     for f in files {
         let text = std::fs::read_to_string(&f).expect("readable");

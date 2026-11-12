@@ -68,6 +68,9 @@ pub fn of_contents(files: &[(&str, &[u8])]) -> Result<String, String> {
             .map(|j| j.join().expect("sha256 thread"))
             .collect()
     });
+    for sha in &hashes {
+        crate::hash_passes::note(sha);
+    }
     from_hashes(
         files
             .iter()
@@ -155,6 +158,20 @@ mod tests {
         assert!(from_hashes([("a", upper.as_str())]).is_err());
         assert!(from_hashes([("a", "00")]).is_err());
         assert!(from_hashes(std::iter::empty()).is_err());
+    }
+
+    /// One call hashes each file once, whatever their number: the half of "a load hashes each
+    /// file once" that this function holds (a loader holds the other: one call per load). Bytes
+    /// of this test's own, so that the tests beside it count apart.
+    #[test]
+    fn one_call_hashes_each_file_once() {
+        let (a, b): (&[u8], &[u8]) = (b"model_digest one pass a", b"model_digest one pass b");
+        of_contents(&[("a.gguf", a), ("b.gguf", b)]).unwrap();
+        assert_eq!(crate::hash_passes::of(&sha(a)), 1);
+        assert_eq!(crate::hash_passes::of(&sha(b)), 1);
+        of_contents(&[("a.gguf", a)]).unwrap();
+        assert_eq!(crate::hash_passes::of(&sha(a)), 2);
+        assert_eq!(crate::hash_passes::of(&sha(b)), 1);
     }
 
     /// v1 hashed the concatenated bytes; v2 a manifest. The same files give two

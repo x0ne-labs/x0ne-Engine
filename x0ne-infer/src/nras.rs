@@ -541,7 +541,8 @@ fn pinned_leaf_key(
 
 /// The leaf's signature under the pinned intermediate, by `alg` only. The
 /// leaf must declare that same algorithm, in its signed TBS field and in its
-/// unsigned outer one; the intermediate's key must be of the type `alg` needs.
+/// unsigned outer one, written the same way in both; the intermediate's key
+/// must be of the type `alg` needs.
 fn verify_leaf_signature(
     leaf: &X509Certificate<'_>,
     inter: &X509Certificate<'_>,
@@ -565,6 +566,13 @@ fn verify_leaf_signature(
                 "leaf {field} is {oid}, the pinned intermediate signs with {expected}"
             )));
         }
+    }
+    // RFC 5280, section 4.1.1.2: the two are the same AlgorithmIdentifier,
+    // byte for byte. No signature covers the outer one.
+    if !crate::pcs::signature_algorithm_repeated(leaf.as_raw()) {
+        return Err(bad(
+            "leaf: the signed and the outer signature algorithms differ".into(),
+        ));
     }
     let tbs = leaf.tbs_certificate.as_ref();
     let sig = leaf.signature_value.data.as_ref();
@@ -1639,6 +1647,22 @@ pub(crate) mod tests {
     const L004: &[u8] = include_bytes!("../tests/nvidia_nras_gpu_leaf_under_004_2026-10-18.der");
     const L005: &[u8] = include_bytes!("../tests/nvidia_nras_gpu_leaf_under_005_2026-10-18.der");
 
+    /// NVIDIA's two real leaves, each with its intermediate and its name.
+    pub(crate) const REAL_LEAVES: [(&[u8], &[u8], &str); 2] =
+        [(L004, I004, "004"), (L005, I005, "005")];
+
+    /// The key `leaf` gives under `inter` and the production pins, at the
+    /// time the real ones were fetched: what `pinned_leaf_key` says.
+    pub(crate) fn real_leaf_key(leaf: &[u8], inter: &[u8]) -> Result<Vec<u8>, NrasRejected> {
+        pinned_leaf_key(
+            "real",
+            &x5c(leaf, inter),
+            &NVIDIA_NRAS_GPU_INTERMEDIATE_PINS,
+            JWKS_GET_AT,
+        )
+        .map(|k| k.to_sec1_bytes().to_vec())
+    }
+
     /// A JWKS entry's `x5c`: leaf, then intermediate.
     fn x5c(leaf: &[u8], inter: &[u8]) -> Vec<serde_json::Value> {
         vec![
@@ -2119,6 +2143,35 @@ pub(crate) mod tests {
                 "{name} presented with the other intermediate"
             );
         }
+    }
+
+    /// RFC 5280, section 4.1.1.2: the leaf's outer `signatureAlgorithm` MUST
+    /// be the one inside its signed part, parameters included. NVIDIA's two
+    /// real leaves, their outer algorithm written the other way (a NULL
+    /// dropped under 004, a NULL added under 005): the same OID, bytes no
+    /// signature covers.
+    #[test]
+    fn a_real_leaf_whose_outer_algorithm_is_written_otherwise_is_refused() {
+        use crate::nras_ocsp::tests::{der_oid, null, seq, with_outer_algorithm};
+        const SHA256_RSA: &[u64] = &[1, 2, 840, 113549, 1, 1, 11];
+        const ECDSA_SHA384: &[u64] = &[1, 2, 840, 10045, 4, 3, 3];
+        let all = NVIDIA_NRAS_GPU_INTERMEDIATE_PINS;
+        let mut not_refused = Vec::new();
+        for (leaf, inter, outer, name) in [
+            (L004, I004, seq(&[&der_oid(SHA256_RSA)]), "004"),
+            (L005, I005, seq(&[&der_oid(ECDSA_SHA384), &null()]), "005"),
+        ] {
+            pinned_leaf_key("real", &x5c(leaf, inter), &all, JWKS_GET_AT)
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            let changed = with_outer_algorithm(leaf, &outer);
+            assert_ne!(changed, leaf, "{name}");
+            match pinned_leaf_key("real", &x5c(&changed, inter), &all, JWKS_GET_AT) {
+                Err(NrasRejected::LeafNotPinnedIssuer(why))
+                    if why.contains("algorithms differ") => {}
+                other => not_refused.push(format!("{name}: {:?}", other.map(|_| "a key"))),
+            }
+        }
+        assert!(not_refused.is_empty(), "{not_refused:#?}");
     }
 
     /// SECURITY: under 004 the leaf's RSA signature is verified,

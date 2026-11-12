@@ -242,6 +242,14 @@ fn verify_signer(
             root.subject()
         ));
     }
+    // RFC 5280, section 4.1.1.2: the algorithm written after the signed part
+    // MUST be the one inside it. `require_pss_sha256` reads the outer one,
+    // which the root's signature does not cover.
+    if !crate::pcs::signature_algorithm_repeated(cert.as_raw()) {
+        return Err(
+            "signer certificate: the signed and the outer signature algorithms differ".into(),
+        );
+    }
     require_pss_sha256(&cert)?;
     let root_key = RsaPublicKey::from_public_key_der(root.public_key().raw)
         .map_err(|e| format!("pinned root key: {e}"))?;
@@ -447,6 +455,7 @@ pub(crate) mod tests {
 
         pub(crate) struct FakeGoogle {
             pub(crate) root_der: Vec<u8>,
+            root_key: RsaPrivateKey,
             signer_der: Vec<u8>,
             signer_key: RsaPrivateKey,
         }
@@ -510,19 +519,50 @@ pub(crate) mod tests {
         const OID_SHA256: &[u8] = &[
             0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01,
         ];
+        const OID_SHA384: &[u8] = &[
+            0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02,
+        ];
+        const OID_SHA256_RSA: &[u8] = &[
+            0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b,
+        ];
         const OID_CN: &[u8] = &[0x06, 0x03, 0x55, 0x04, 0x03];
         const OID_BASIC_CONSTRAINTS: &[u8] = &[0x06, 0x03, 0x55, 0x1d, 0x13];
         const OID_KEY_USAGE: &[u8] = &[0x06, 0x03, 0x55, 0x1d, 0x0f];
 
-        /// RSASSA-PSS, SHA-256, MGF1-SHA-256, salt 32 (RFC 4055).
-        fn pss_sha256() -> Vec<u8> {
-            let sha256 = seq(&[OID_SHA256, &[0x05, 0x00]]);
-            let params = seq(&[
-                &der(0xa0, &sha256),
-                &der(0xa1, &seq(&[OID_MGF1, &sha256])),
-                &der(0xa2, &der(0x02, &[32])),
-            ]);
-            seq(&[OID_PSS, &params])
+        /// RSASSA-PSS over the hash `oid` with MGF1 over the same and a salt
+        /// of `salt` bytes (RFC 4055); `trailer` writes the default trailer
+        /// field out, which DER leaves unwritten.
+        fn pss(oid: &[u8], salt: u8, trailer: bool) -> Vec<u8> {
+            let hash = seq(&[oid, &[0x05, 0x00]]);
+            let mut params = vec![
+                der(0xa0, &hash),
+                der(0xa1, &seq(&[OID_MGF1, &hash])),
+                der(0xa2, &der(0x02, &[salt])),
+            ];
+            if trailer {
+                params.push(der(0xa3, &der(0x02, &[1])));
+            }
+            seq(&[OID_PSS, &der(0x30, &params.concat())])
+        }
+
+        /// RSASSA-PSS, SHA-256, MGF1-SHA-256, salt 32: Google's.
+        pub(crate) fn pss_sha256() -> Vec<u8> {
+            pss(OID_SHA256, 32, false)
+        }
+
+        /// The same, its trailer field written out: other bytes, same meaning.
+        pub(crate) fn pss_sha256_with_its_trailer() -> Vec<u8> {
+            pss(OID_SHA256, 32, true)
+        }
+
+        /// RSASSA-PSS, SHA-384, MGF1-SHA-384, salt 48.
+        pub(crate) fn pss_sha384() -> Vec<u8> {
+            pss(OID_SHA384, 48, false)
+        }
+
+        /// sha256WithRSAEncryption: PKCS#1 v1.5.
+        pub(crate) fn pkcs1_sha256() -> Vec<u8> {
+            seq(&[OID_SHA256_RSA, &[0x05, 0x00]])
         }
 
         fn name(cn: &str) -> Vec<u8> {
@@ -535,6 +575,9 @@ pub(crate) mod tests {
                 .to_vec()
         }
 
+        /// A certificate signed with RSASSA-PSS SHA-256 salt 32, whatever it
+        /// names: `signed` is the algorithm written inside its signed part,
+        /// `outer` the one written after it.
         fn certificate(
             serial: u8,
             issuer: &str,
@@ -542,6 +585,7 @@ pub(crate) mod tests {
             subject_key: &RsaPrivateKey,
             issuer_key: &RsaPrivateKey,
             ca: bool,
+            (signed, outer): (&[u8], &[u8]),
         ) -> Vec<u8> {
             let spki = subject_key
                 .to_public_key()
@@ -562,7 +606,7 @@ pub(crate) mod tests {
             let tbs = seq(&[
                 &der(0xa0, &der(0x02, &[2])),
                 &der(0x02, &[serial]),
-                &pss_sha256(),
+                signed,
                 &name(issuer),
                 &seq(&[&der(0x17, b"250101000000Z"), &der(0x17, b"491231235959Z")]),
                 &name(subject),
@@ -570,29 +614,30 @@ pub(crate) mod tests {
                 &der(0xa3, &extensions),
             ]);
             let sig = pss_sign(issuer_key, &tbs, u64::from(serial) << 32);
-            seq(&[
-                &tbs,
-                &pss_sha256(),
-                &der(0x03, &[&[0u8][..], &sig].concat()),
-            ])
+            seq(&[&tbs, outer, &der(0x03, &[&[0u8][..], &sig].concat())])
         }
+
+        const ROOT: &str = "x0ne TEST GCE-cc-tcb-root";
+        const SIGNER: &str = "x0ne TEST GCE-uefi-signer";
 
         pub(crate) fn fake_google() -> &'static FakeGoogle {
             static G: OnceLock<FakeGoogle> = OnceLock::new();
             G.get_or_init(|| {
                 let root = key(ROOT_P, ROOT_Q);
                 let signer_key = key(SIGNER_P, SIGNER_Q);
-                const ROOT: &str = "x0ne TEST GCE-cc-tcb-root";
+                let pss = pss_sha256();
                 FakeGoogle {
-                    root_der: certificate(1, ROOT, ROOT, &root, &root, true),
+                    root_der: certificate(1, ROOT, ROOT, &root, &root, true, (&pss, &pss)),
                     signer_der: certificate(
                         2,
                         ROOT,
-                        "x0ne TEST GCE-uefi-signer",
+                        SIGNER,
                         &signer_key,
                         &root,
                         false,
+                        (&pss, &pss),
                     ),
+                    root_key: root,
                     signer_key,
                 }
             })
@@ -621,12 +666,38 @@ pub(crate) mod tests {
             /// A `VMLaunchEndorsement` for the binary of SHA-384 `uefi_sha384`
             /// listing `mrtds` (ram_gib 0), signed now by our signer.
             pub(crate) fn endorse(&self, uefi_sha384: &[u8], mrtds: &[[u8; 48]]) -> Vec<u8> {
+                self.endorse_under(&self.signer_der, uefi_sha384, mrtds)
+            }
+
+            /// Our signer's certificate, issued again by our root with
+            /// `signed` as the algorithm inside its signed part and `outer`
+            /// as the one after it. Signed as always.
+            pub(crate) fn signer_naming(&self, signed: &[u8], outer: &[u8]) -> Vec<u8> {
+                certificate(
+                    2,
+                    ROOT,
+                    SIGNER,
+                    &self.signer_key,
+                    &self.root_key,
+                    false,
+                    (signed, outer),
+                )
+            }
+
+            /// [`Self::endorse`], carrying `signer_der` as the certificate of
+            /// our signer's key.
+            pub(crate) fn endorse_under(
+                &self,
+                signer_der: &[u8],
+                uefi_sha384: &[u8],
+                mrtds: &[[u8; 48]],
+            ) -> Vec<u8> {
                 let mut golden = Vec::new();
                 let mut ts = Vec::new();
                 field_varint(1, 1_789_000_000, &mut ts);
                 field_bytes(1, &ts, &mut golden);
                 field_varint(2, 1, &mut golden);
-                field_bytes(4, &self.signer_der, &mut golden);
+                field_bytes(4, signer_der, &mut golden);
                 field_bytes(5, uefi_sha384, &mut golden);
                 let mut tdx = Vec::new();
                 field_varint(1, 2, &mut tdx);
@@ -648,6 +719,47 @@ pub(crate) mod tests {
                 self.endorse(&sha2::Sha384::digest(firmware), mrtds)
             }
         }
+    }
+
+    /// RFC 5280, section 4.1.1.2: the algorithm written after the signed part
+    /// of the signer certificate MUST be the one inside it. The signature is
+    /// always checked as RSASSA-PSS SHA-256 salt 32: a signed part that names
+    /// another algorithm, or an outer one written otherwise, is not Google's
+    /// shape.
+    #[test]
+    fn a_signer_certificate_whose_outer_algorithm_is_not_the_signed_one_is_refused() {
+        use fake_google::{pkcs1_sha256, pss_sha256, pss_sha256_with_its_trailer, pss_sha384};
+        let g = fake_google::fake_google();
+        let endorsed = |signed: &[u8], outer: &[u8]| {
+            let blob = g.endorse_under(&g.signer_naming(signed, outer), &[0xab; 48], &[[0x5; 48]]);
+            verify(&blob, &g.root_der, NOW).map(|e| e.uefi_sha384_hex)
+        };
+        let pss = pss_sha256();
+        assert_eq!(endorsed(&pss, &pss), Ok("ab".repeat(48)));
+        let mut not_refused = Vec::new();
+        for (what, signed, outer) in [
+            (
+                "the signed part names RSASSA-PSS SHA-384",
+                pss_sha384(),
+                pss.clone(),
+            ),
+            (
+                "the signed part names sha256WithRSAEncryption",
+                pkcs1_sha256(),
+                pss.clone(),
+            ),
+            (
+                "the outer algorithm writes its trailer field out",
+                pss.clone(),
+                pss_sha256_with_its_trailer(),
+            ),
+        ] {
+            match endorsed(&signed, &outer) {
+                Err(e) if e.contains("algorithms differ") => {}
+                other => not_refused.push(format!("{what}: {other:?}")),
+            }
+        }
+        assert!(not_refused.is_empty(), "{not_refused:#?}");
     }
 
     /// Our Google signs the way `verify` requires, and only under its root.

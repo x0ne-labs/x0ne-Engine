@@ -131,8 +131,11 @@ a reference (`ci/deb/*.ctl` here and x0ne-OS `packages/*.ctl`, read on
 signed by the archive key's subkey (x0ne-OS `docs/archive-key.md`, not public yet):
 `x0ne-cvm-<V>.tar.gz`, the reference `x0ne-cvm-<V>.json` and its
 `x0ne-cvm-<V>.json.sig`. A reference you build yourself (x0ne-OS `make cvm`, not public yet)
-is not signed by that key, and the relay refuses it (99). Keep the `.sig`
-next to the reference, then, for 0.2.1:
+is not signed by that key, and the relay refuses it (99). No such release
+tree is published yet (Status, above): the `image import`, `up` and `run`
+lines below need files that cannot be obtained today, and they are given as
+what a first session will take. Keep the `.sig` next to the reference, then,
+for 0.2.1:
 
 ```sh
 x0ne-engine cloud image import x0ne-cvm-0.2.1.tar.gz --reference x0ne-cvm-0.2.1.json   # once per project
@@ -219,8 +222,12 @@ After "yes":
    is 12.6 min for `qwen3:0.6b`, 18.8 min for 16.4 GB (`qwen3:8b`, so
    `--max-run` of at least 24 min) and 39.3 min for 65.5 GB (`qwen3:32b`,
    `--max-run` of at least 45 min); the rate is an assumption, not measured
-   on a TD. Every file is hashed twice, once by `pull` and once for the served
-   digest; the rate does not count the passes separately.
+   on a TD. Before it answers, the TD hashes each weight file once, on the
+   mapping it serves: that pass is the check against the catalog and the
+   file's line of the served digest (two passes until 0.2.0-beta.7). The
+   small files (`config.json`, `tokenizer.json`, the index) are still hashed
+   by `pull` and again for the served digest. The rate does not count the
+   passes separately.
 8. `[3/5]` It sends `connect` to the relay. **The relay fetches the proof and
    checks it on this machine. No question and no session key are sent to the
    VM before its verdict.**
@@ -281,7 +288,9 @@ After "yes":
     process (SIGUSR1, SIGALRM, SIGPWR, the real-time signals...),
     `x0ne-engine cloud down`, the end of the session (`--max-run`, or 5 min
     before a token `up` cannot renew expires), the relay ending, or the
-    VM disappearing (spot preemption, checked every 30 s). `serving` is not
+    VM disappearing (spot preemption, checked every 30 s; less often while
+    Google does not answer, the pause doubling up to 8 min, and `up` says
+    when it cannot see a preemption and when it can again). `serving` is not
     waited for past the end of the session either (exit 93). These do not stop
     the session: SIGKILL; SIGSTOP, which freezes `up`; a fault (SIGSEGV,
     SIGBUS, SIGILL, SIGFPE); SIGTRAP, SIGSYS and SIGABRT; and signal 33, which
@@ -289,7 +298,11 @@ After "yes":
     end `up` leave the VM to `--max-run` (see below).
 11. It stops the relay: `stop`, end of input, 10 s, then SIGKILL. It deletes the
     VM and the firewall rule, confirms that both are gone, and prints the
-    estimated cost.
+    estimated cost. A delete that fails in passing (no answer, 408, 429,
+    5xx) is asked again, up to four times; each resource is read back, and
+    one still there is deleted again. A panic of `up` itself after the
+    creation started goes through the same deletion before it ends `up`
+    (exit 101).
 
 ## The firewall rule
 
@@ -396,9 +409,11 @@ chat in the terminal at step `[5/5]`.
   into this build (the relay's `x0ne-infer/catalog/models.toml`). A model that
   is absent, or present without a pinned served-model digest ("no served
   digest pinned yet"), is refused (exit 2): nothing is asked, nothing is
-  created. The message lists the models a cloud session serves: `qwen3:0.6b`,
-  `qwen3:1.7b`, `qwen3:8b`, `qwen3:14b` and `qwen3:32b` in this version,
-  Qwen3 only ([docs/models.md](models.md)).
+  created. The message lists the models the catalog pins with a served
+  digest: `qwen3:0.6b`, `qwen3:1.7b`, `qwen3:8b`, `qwen3:14b` and `qwen3:32b`
+  in this version, Qwen3 only ([docs/models.md](models.md)). On hardware,
+  this Engine on x0ne Core has served `qwen3:8b` only, in one TEST run on
+  2026-11-04 ([hardware-runs.md](hardware-runs.md)).
 - **In the TD**, `x0ne-infer --cloud-config` pulls the model and checks every
   file against the catalog, shards included. It maps, read-only, the weight
   files the catalog lists (never a directory listing): `model.safetensors`, or
@@ -439,6 +454,12 @@ chat in the terminal at step `[5/5]`.
   error; in `run`, that ends the session and the VM is deleted. A failed
   generation is a red `[no answer: …]` line, and the chat goes on without
   that question or its partial answer in the conversation.
+- **A connection to the local API has 61 minutes to send each request**:
+  one that sends no whole request head within 61 minutes of its accept, or
+  of the end of the answer before, is closed, idle or slow (since
+  2026-11-10; it stayed open for as long as its peer did). An answer is not
+  timed by this, a stream included. It bounds how long a connection is
+  held, not how many connections a client opens.
 - **The local API stays open** to other clients for the whole session:
   `curl`, or `x0ne-engine cloud chat` from another terminal, which finds the
   address and the key in the session state and becomes the relay's chat
@@ -478,7 +499,10 @@ pulled before 0.2.0-beta.6, its shards merged into one file, is replaced on
 the next `pull`. Version 1 (sha256 of `model.safetensors` ‖ `config.json` ‖
 `tokenizer.json`) is gone; the values it pinned are in the CHANGELOG.
 
-## Every way it ends deletes the VM
+## How a session ends, and what is left
+
+Every ending `up` lives through deletes the VM. An `up` that is killed
+cannot: the VM then stays until `--max-run`, or until `down`.
 
 | what happens | exit | what is left |
 |---|---|---|
@@ -936,6 +960,8 @@ builds (`tests/source_sweep.rs` keeps it so).
 |---|---|
 | `X0NE_ENGINE_GCP_ENDPOINT=http://127.0.0.1:<port>` | every API call (OAuth, Compute, Billing, Storage) goes to one local fake; anything but plain http to the IP literal `127.0.0.1` or `[::1]`, with an explicit port, is refused (exit 2) |
 | `X0NE_ENGINE_CLOUD_TEST_POLL_MS`, `X0NE_ENGINE_CLOUD_TEST_BOOT_TIMEOUT_MS` | shorter timings; refused (exit 2) unless the endpoint above is set to the loopback |
+| `X0NE_ENGINE_CLOUD_TEST_OP_TIMEOUT_MS`, `X0NE_ENGINE_CLOUD_TEST_HTTP_TIMEOUT_MS` | the upper bound of one provider operation and of one API request (5 min each otherwise), so that a test of an operation that never ends, or of an answer that never comes, lasts seconds; refused (exit 2) unless the endpoint above is the loopback |
+| `X0NE_ENGINE_CLOUD_TEST_PANIC_AT=creating\|booting\|verifying\|serving` | `up` panics at that step, as a bug would: the test that its VM is deleted all the same; refused (exit 2) unless the endpoint above is the loopback |
 | `X0NE_ENGINE_CLOUD_TEST_REFERENCE_DIR` | where `up` looks for the installed reference instead of `/usr/share/x0ne-engine/reference`; refused (exit 2) unless the endpoint above is the loopback; the relay never sees it |
 | `X0NE_ENGINE_CLOUD_TEST_MYADDR_SERVER=127.0.0.1:<port>` | the name server asked for this machine's public address, instead of `ns1.google.com:53`; a loopback `ip:port` only, refused (exit 2) unless the endpoint above is the loopback |
 
@@ -950,6 +976,15 @@ no network:
   (`tests/serial/`, two status blocks of the VM refused on 2026-10-25), or
   an error;
 - `tests/fake_proxy.rs`: fake relays that refuse, crash, hang or lie.
+- `tests/chaos.rs`: the same fake, failing on purpose. One fault (an HTTP
+  error, a reset, a lost, stalled, cut or unreadable answer, an operation
+  that fails or never ends) at each request of `up`, `down`, `sweep`,
+  `image import` and `image delete`; every ending signal at every phase of
+  `up`; `up` killed, then `down` or `sweep`; two commands at once. After
+  each case: nothing the command was in charge of is left, or the exit code
+  is 94 and standard error names it with the command that removes it.
+  `X0NE_ENGINE_CLOUD_CHAOS=full` runs every case instead of one in four
+  (`CI_STEPS=chaos make ci`).
 
 ## What it does not protect
 

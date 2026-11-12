@@ -551,6 +551,15 @@ impl LoadedModel for Loaded {
         self.generate_streaming(prompt, params, &mut NoSink)
     }
 
+    fn generate_whole(
+        &self,
+        prompt: &Prompt,
+        params: &GenerationParams,
+        sink: &mut dyn TokenSink,
+    ) -> anyhow::Result<Completion> {
+        self.generate_streaming(prompt, params, sink)
+    }
+
     fn generate_streaming(
         &self,
         prompt: &Prompt,
@@ -703,13 +712,18 @@ impl LoadedModel for Loaded {
                 .tokenizer
                 .decode(&ids, true)
                 .map_err(|e| anyhow::anyhow!("decode: {e}"))?;
-            let (text, stopped) = crate::backend::cut_at_stop(&text, &params.stop);
+            let (mut text, stopped) = crate::backend::cut_at_stop(&text, &params.stop);
+            let joins = constraint.as_ref().is_none_or(|c| c.joins_to(&text));
+            // A character the budget cut is left out: see `Constraint::text`.
+            if let Some(c) = constraint.as_ref().filter(|_| joins) {
+                text.truncate(c.text().len());
+            }
             // What was streamed must be what is signed: a decoder whose output is
             // not prefix-stable is an error here, never a receipt over other text.
             let Some(rest) = text.strip_prefix(emitted.as_str()) else {
                 return Err(NotPrefixStable.into());
             };
-            if constraint.as_ref().is_some_and(|c| !c.joins_to(&text)) {
+            if !joins {
                 anyhow::bail!(
                     "json_schema: the decoded text is not the bytes the mask let through"
                 );
@@ -750,7 +764,7 @@ impl LoadedModel for Loaded {
             text,
             prompt_tokens: prompt_len as u32,
             completion_tokens: generated.len() as u32,
-            stopped,
+            stopped: stopped || closed,
             // The budget, not params.max_tokens: the context window may have
             // cut it. A closed document was not cut.
             length: !closed && generated.len() >= max_tokens,
@@ -939,22 +953,8 @@ fn finish(
             spec.decoder.max_position_embeddings
         );
     }
-    let special = crate::prompt::special_ids(&tokenizer);
-    let missing: Vec<&str> = spec
-        .arch
-        .control_markers()
-        .iter()
-        .copied()
-        .filter(|m| !special.contains_key(*m))
-        .collect();
-    if !missing.is_empty() {
-        anyhow::bail!(
-            "tokenizer.json: {} not a special added token: the {} template's markers \
-             would be text a message can type",
-            missing.join(", "),
-            spec.arch.name()
-        );
-    }
+    crate::prompt::require_control_markers(&tokenizer, spec.arch)
+        .map_err(|e| anyhow::anyhow!(e))?;
     let eos_names: &[&str] = match spec.arch {
         Architecture::Ministral3 => &["</s>"],
         _ => &["<|im_end|>", "<|endoftext|>"],

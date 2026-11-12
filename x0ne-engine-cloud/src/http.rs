@@ -133,6 +133,15 @@ impl ApiError {
     pub fn unauthorized(&self) -> bool {
         matches!(self.status, Some(401))
     }
+    /// A failure the same call may not meet again: no answer at all, an
+    /// answer cut before its end, or one that says the service is busy or
+    /// broken (408, 429, 5xx).
+    pub fn transient(&self) -> bool {
+        match self.status {
+            None => self.reason == "network",
+            Some(s) => self.reason == "network" || s == 408 || s == 429 || (500..=599).contains(&s),
+        }
+    }
 }
 
 impl std::fmt::Display for ApiError {
@@ -198,15 +207,20 @@ pub enum Body {
 }
 
 impl Api {
-    pub fn new(ep: Endpoints, token: Box<dyn TokenSource>) -> Result<Self, Failure> {
+    /// `timeout` bounds one request, its answer included ([`crate::Knobs::http_timeout`]).
+    pub fn new(
+        ep: Endpoints,
+        token: Box<dyn TokenSource>,
+        timeout: Duration,
+    ) -> Result<Self, Failure> {
         let client = reqwest::Client::builder()
             .user_agent(concat!("x0ne-engine-cloud/", env!("CARGO_PKG_VERSION")))
             .redirect(reqwest::redirect::Policy::none())
             // `loopback` is set by `Endpoints::loopback` alone, which a
             // release build does not contain: HTTPS only, there.
             .https_only(!ep.loopback)
-            .connect_timeout(Duration::from_secs(30))
-            .timeout(Duration::from_secs(300))
+            .connect_timeout(Duration::from_secs(30).min(timeout))
+            .timeout(timeout)
             .build()
             .map_err(|e| Failure::Preflight(format!("http client: {e}")))?;
         Ok(Api {

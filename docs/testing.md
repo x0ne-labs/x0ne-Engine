@@ -43,3 +43,18 @@ end on its own event log, Google's endorsement of its MRTD and the run's
 reference, without pins, and an altered signature bit, pin, `report_data`,
 collateral, PCK CRL, root CA CRL, endorsement, log event or PCK chain is
 refused at its step.
+
+`cargo test -p x0ne-infer --lib -- cloud_e2e_tests::system` runs the
+whole-system scenarios (`x0ne-infer/src/system_e2e_tests.rs`): the platform
+with its collateral, the TD and the relay as three child processes of the
+test binary, each with its own keys, the test as the local client. A session
+is answered whole, streamed and sealed, every receipt checked by the SDK, and
+no process's stdout, stderr or file holds the session key, the bearer or a
+question; a TD killed in the middle of a stream loses the session, and its
+restart is given nothing; a relay that refuses exits with the code of its
+refusal. In one process: 56 clients on seven sessions, a full queue, bodies
+past their cap, the middle between the relay and the TD, the carrier of the
+sealed path, and the relay and the SDK on one corpus of lying platforms. The
+TDX quote, Intel PCS, Google's bucket and the model are simulated; the
+shipped binaries `x0ne-infer` and `x0ne-engine-proxy` take no test trust
+anchor and are not what these scenarios run.

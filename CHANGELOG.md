@@ -5,6 +5,288 @@ the first non-beta tag will freeze the receipt protocol below.
 
 ## Unreleased
 
+### Security
+
+- `x0ne-engine-proxy` no longer takes a control line it ignores for the
+  model key's acceptance (2026-11-10). `x0ne-engine cloud` drives the relay
+  with one JSON line per command on its standard input. A line the relay
+  ignores (not JSON, another protocol, a `connect` without its boot
+  deadline, a second `connect`) that came while the key was being sent
+  ended the sending: the key's request was dropped half-way and the relay
+  went on as if the TD had accepted the key, "key accepted; waiting for the
+  TD to load the model". Such a line that came while the TD's evidence was
+  being verified started the verification over. Each of the two steps now
+  runs once, to its own result; `stop` and the end of the input end it as
+  before.
+- x0ne Core refuses a tokenizer in which a marker of the chat template is
+  not a special added token, as candle already did, and one that knows
+  neither `<|im_end|>` nor `<|endoftext|>` (2026-11-10). As a plain word, a
+  marker is text a message can type to forge a turn; without an end token,
+  no answer ends before its budget. Both are refused when the model loads,
+  naming the tokens.
+- The dates of Intel's collateral and of an HTTP `Date` header are digits
+  alone, each field in its range (2026-11-10, 2026-11-12). The issue and
+  next-update dates of a tcbInfo or a QE identity (`tcb::date_unix`) and the
+  `Date` header of Intel's PCS and AMD's KDS answers
+  (`remote_verify::parse_http_date`) read each field with `str::parse`,
+  which takes a sign: `2026-+1-+1T-1:00:00Z` was a date, and no field was
+  held to its range. Both now read their fields with `tcb::date_field`,
+  unsigned decimal digits of the field's length, and refuse a month outside
+  1 to 12, a day outside 1 to 31, an hour past 23, a minute past 59 and a
+  second past 60. A collateral date holding a multi-byte character panicked
+  the reader and is refused; a `Date` year of any length was read, and could
+  overflow the day count: it is four digits at most. A tcbInfo and a QE identity are
+  under Intel's signature; a `Date` header is not.
+- Every verifier of a certificate or a CRL compares the `signatureAlgorithm`
+  written after the signed part with the one inside it, DER byte for byte,
+  parameters included (RFC 5280, 4.1.1.2 and 5.1.1.2; 2026-11-10,
+  `pcs::signature_algorithm_repeated`). No signature covers the outer one.
+  Intel's (`pcs::verify_cert_signed_by`, `tcb::verify_pck_crl`,
+  `tcb::verify_root_crl`) did not compare them; nor did the certificate of a
+  delegated OCSP responder (`nras_ocsp.rs`), which travels outside what the
+  response's signature covers, nor NVIDIA's NRAS signing leaf (`nras.rs`),
+  whose parameters were compared with nothing; the signer of Google's launch
+  endorsement (`gce_endorsement.rs`) had its outer algorithm required and its
+  signed one not read, though every byte of that certificate is under the
+  endorsement's signature. AMD's (`snp.rs`) compared the two as x509-parser
+  parses them, which reads neither the tag of the outer `AlgorithmIdentifier`
+  nor that of its OID. The certificates and CRLs kept as files in the
+  tree (Intel, AMD, NVIDIA, Google) write the two alike.
+- The header of a TD quote is checked before its signature section is read
+  (2026-11-10). A TD Quote v4 names the kind of key that signs it
+  (`att_key_type`, bytes 2 and 3); it was never read, and the signature
+  section was taken as an ECDSA P-256 key and signature whatever the header
+  said. `tdx_quote::check_header` refuses any value but 2, and any
+  `qe_vendor_id` but Intel's, each by name, with the version and the TEE
+  type; `tdx_quote::parse` and `pcs::parse_sig_section` call it. Intel's
+  own verifier requires these four fields (`Quote::validate` of its
+  QuoteVerificationLibrary). The two real quotes of the tree verify as
+  before.
+- Firmware descriptors are bounded (2026-11-10). `snp_launch::Ovmf::parse`
+  took the section count and the section sizes of the `ASEV` descriptor as
+  written: a section of 4 GiB is a million page hashes for
+  `x0ne-engine snp-measure`. It now refuses more than 64 sections and a
+  section of more than 64 MiB, the bounds `tdvf.rs` has. `tdvf.rs` adds a
+  section's offset and size in u64: in a 32-bit `usize`, as in x0ne-sdk
+  built for wasm32, the sum could wrap below the image's length and pass.
+- x0ne Core refuses a hostile `config.json` (2026-11-10): three defects
+  fixed in x0ne Core and copied (fingerprint `10d4c8ea7890`,
+  `x0ne-core/PROVENANCE.md`), found by the tests of `x0ne-core/oracle`.
+  `weights::plan` and `check_config` multiplied sizes with no check, a panic
+  with overflow checks and a product that wraps without them: a config whose
+  derived sizes overflow is refused when it is parsed, and the products of
+  the load are checked. `weights::check` built the names of every layer the
+  config states before it looked one up, 1.3 s to refuse 300 000 layers; it
+  stops at the first tensor the checkpoint lacks.
+- The TD served directly and the relay's local endpoint close a connection
+  that sends no request (2026-11-10), as the cloud TD already did:
+  `axum::serve` gives hyper no timer, and a connection that sent nothing,
+  part of a request line or a head without its end stayed open for as long
+  as its peer did. Both are served by `server::serve_http`: a request head
+  must be whole within 61 minutes (`server::HEAD_TIMEOUT`) of the accept or
+  of the end of the answer before, else the connection is closed. An answer
+  is not timed by it. The bound is long so that a client's pool of idle
+  connections does not send a request into the close; it bounds how long a
+  peer holds a connection, not how many connections it opens.
+- A request that holds a queue place has 30 s to send its body
+  (`server::BODY_TIMEOUT`, 2026-11-10). The place is taken when the head is
+  read: a caller that sent a head and then no body, or a byte at a time,
+  held it for as long as it stayed connected, and `--max-queue + 1` such
+  callers had every other request told 503. Past 30 s
+  `POST /v1/chat/completions` answers 408 in the error shape, padded as any
+  refusal of a whole answer, on the TD served directly and on the cloud TD;
+  the sealed route (`POST /v2/e2e/chat`) answers its one refusal, the 400
+  unchanged; the place is free. A body whole in time is read as before,
+  however slowly it came. The relay's local endpoint has no queue and is
+  unchanged. Tested in memory with a scripted model and the clock paused.
+
+### Changed
+
+- The collateral of a verdict is fetched together, not one GET after the
+  other (2026-11-10). The relay's verdict asks Intel and Google eight
+  things in three round trips: the QE identity alone, whose `Date` header
+  dates everything else; then, once the quote is verified and bound to the
+  channel, the tcbInfo, Intel's `early` tcbInfo and QE identity, the PCK
+  CRL, the root CA CRL and Google's endorsement; then the firmware binary
+  the verified endorsement names. The TD's own live check asks its six
+  together, `sdk_collateral` seven then the binary, and a connection's GPU
+  proof sends its NRAS call and its JWKS GET together. No check changed or
+  moved: each answer is read where it was before (`abreast.rs`), so a
+  refusal is the one a serial run gave, code and words. Intel now sees up
+  to five GETs at once from the relay, on up to five HTTP/1.1 connections,
+  and six from a TD. Against the tests' fakes behind a proxy that waits
+  50 ms before each GET, the relay's verdict took 169 ms instead of 428; no
+  real service was measured.
+- A TD hashes the weights once before it attests, not twice (2026-11-10).
+  The intake (`registry::pull_served`) maps each weight file and hashes the
+  mapping once: that sha256 is compared to the catalog's and is the file's
+  line of the served digest. After a download this runs in `staging/`, last
+  before the rename into `models/`: nothing enters `models/` unverified, and
+  a file that is not the catalog's is refused as before (96). A
+  `config.json` refused for `auto_map` or its architecture is now refused
+  before the weights are hashed. The digest in the quote is still one the
+  TD computed on the bytes it mapped. `x0ne-engine pull`, `verify` and the
+  fetch of sealed weights are unchanged.
+- x0ne Core reads the token table of `json_schema` once per loaded model,
+  not for each request (2026-11-10). The table of the vocabulary's bytes is
+  read at a model's first request under a schema and kept
+  (`stepped::TableCache`), before the request waits for the engine; it holds
+  the vocabulary alone, and a schema and its automaton live as long as their
+  request. A seeded property plays 200 random schemas through one kept
+  table and through a table read for each request: the same tokens, or the
+  same error. On Qwen3-0.6B's tokenizer a read takes about 90 ms. No answer
+  changes.
+- Documentation says no more than the code does (2026-11-10). The README's
+  opening says the cloud path does not start from this tree and that its
+  `cloud up` example is a recorded session of a test build; its highlights
+  name what the API refuses (tool calls, 400; `content` as an array of
+  parts, 422) and call the SDK a prototype, not yet run in a browser tab.
+  `docs/api.md` says that x0ne Core refuses `x0ne.conversation` with a 400,
+  that candle is the one backend that keeps a conversation, and that a
+  request that names no budget has 256 tokens. `docs/cloud.md`: "Every way
+  it ends deletes the VM" is "How a session ends, and what is left", since
+  a killed `up` leaves the VM until `--max-run`. `docs/running.md` says
+  `gcp-cvm.sh` does not serve with this version. On hardware this Engine on
+  x0ne Core has served `qwen3:8b` only, and the catalog's five models are
+  no longer called the models "a session can serve". FEATURES: "Several
+  clients at once" is "Up to three requests at once", from one client.
+  `doc_claims_follow_code.rs` holds three of these to the code.
+- `make ci` (2026-11-10, 2026-11-11). A run whose steps all build nothing
+  (`fmt`, `ci-sh`, `features`, `deny`, `gitleaks`) takes no build lock. A
+  run named by `CI_VERDICT_NAME=<name>` writes `out/ci/<sha>.<name>.json`
+  and `latest.<name>.json`, never the verdict of `make ci`; a name outside
+  lowercase letters, digits and dashes is refused (exit 2). The test steps
+  run each test binary through `ci/test-runner.sh`, which has libtest print
+  the time of each test and prints the CPU time of the binary in the step's
+  log. `CHANGELOG.md` merges as a union (`.gitattributes`).
+
+### Fixed
+
+- An answer stops when its caller leaves (2026-11-10). A whole answer was
+  generated to its end after its caller hung up; on candle and x0ne Core it
+  now stops at the next step (`server::Caller`, set when hyper drops the
+  request). A stream whose caller hung up before its header still had its
+  prompt read when its turn came, since the generation's reader until the
+  200 was the request's own task: the stream's sink now asks the caller too,
+  before the prompt is read and at every step. A turn still lasts its ten
+  ticks, and nothing is signed after a cancellation, as before. Not changed:
+  the relay's local endpoint does not close the TD's connection when the
+  caller of a whole answer leaves it, so that answer is generated to its
+  end.
+- `json_schema` (2026-11-10): an answer cut by its budget between two
+  tokens of one character ended with U+FFFD; it ends at the last whole
+  character of the document as far as it was written
+  (`Constraint::text`). A document closed on the last token of the budget
+  was reported with `finish_reason` `length`; it is `stop`.
+- `x0ne-engine cloud` under a failing Google Cloud (2026-11-10).
+  `tests/chaos.rs` runs `up`, `down`, `sweep`, `image import` and
+  `image delete` against the fake Google Cloud with one fault at each
+  request in turn (an HTTP error, a reset, a lost, stalled, cut or
+  unreadable answer, an operation that fails or never ends), every ending
+  signal at every phase of `up`, a killed `up` followed by `down` or
+  `sweep`, generated arguments, and two commands at once; after each case
+  nothing the command was in charge of is left, or the exit code is 94 and
+  standard error names it with the command that removes it. Fixed:
+  - a delete, and the read that confirms it, are asked again on a transient
+    failure (408, 429, 5xx, no answer), four times at most within the
+    operation's deadline: the VM, the session's firewall rule, and
+    everything `sweep`, `image delete` and `image import` delete. One 503
+    no longer leaves them, and a 404 that is not Google's is no longer
+    taken for a deletion with exit 0;
+  - a panic in `up` after the creation started skipped the deletion; the VM
+    and its rule are deleted first, and the exit code is still 101;
+  - after three failed reads of the VM while serving, `up` stopped watching
+    for a preemption until the end of the session; it keeps reading, less
+    often while Google does not answer, and says when the watch is blind
+    and when it is back;
+  - one failed read of an operation failed what it was doing (an import, a
+    creation), or reported a deletion as not confirmed; it is read again;
+  - a transit bucket whose creation lost its answer stayed, and an import
+    that failed after asking for the image could leave the image unsaid:
+    its message says whether the image exists, with
+    `gcloud compute images delete`;
+  - the quote priced no GPU when `machineTypes.get` said 0 accelerators,
+    while the VM asked for one: the maximum cost was below the VM's.
+
+  Tested against the fake Google Cloud only.
+
+### Added
+
+- `x0ne-core/oracle`: a CPU reference of x0ne Core's kernels and forward
+  pass, and tests of the copy against it (2026-11-10). The tests that need
+  no GPU run in `make ci` (step `core`, also under AddressSanitizer); the
+  GPU ones and a performance ratchet (`ci/core-perf.sh`) run in
+  `make core-gpu`, which writes `out/core-gpu/<sha>.json` and marks a step
+  it could not run on a GPU `skipped`, never passed (`ci/core-gpu-check.sh`
+  is the gate). The ratchet's baseline, `ci/core-perf-baseline.json`, is a
+  regression reference for later runs on the same card, not a published
+  benchmark: it holds one run, Qwen3-0.6B on an RTX 5090. The GPU tests of
+  `x0ne-core/oracle` ran on that card through a GPU microVM: 13 kernel tests
+  and 11 engine tests pass. Not run: the Qwen3-8B suite and
+  compute-sanitizer.
+- `make core-gpu` on a machine whose GPU no container can have
+  (2026-11-10). `CORE_GPU_RUNNER` names a launcher that runs one program on
+  the card and hands back its output and exit code (such as x0ne OS's
+  `scripts/microvm-gpu-run.sh`, a GPU microVM; x0ne OS is not public yet):
+  the steps `test`, `reference`, `sanitize` and `perf` then run the binaries
+  the `build` step left, with `x0ne-infer/` and `x0ne-core/` read-only under
+  `/src` and the models under `/data`. A launcher that refuses, or no card,
+  marks the GPU steps `skipped` with its reason; a launcher exit of 199 (the
+  card no longer answers) stops the run, red, its `stopped` field saying
+  "card lost". `sanitize` is `skipped` in that mode unless
+  `CORE_GPU_RUNNER_SANITIZER` gives a copy of the tool, a path that has not
+  run on a card. The `test` step without Qwen3-8B or the prompts runs the
+  tests that need Qwen3-0.6B alone and is `skipped`, "partial", naming what
+  it left out, so the gate still refuses it. Tested against a fake launcher
+  (`ci/tests/core-gpu.sh`) and run once on an RTX 5090 with Qwen3-0.6B.
+- `make bench`, a benchmark suite replayed by one command on the local
+  NVIDIA GPU (2026-11-10). Tier by tier: x0ne Core alone per prompt length
+  up to the largest context the card holds (a new example, `core-bench`),
+  the server of the unit tests on Core streamed and whole, 1 to 32 clients
+  against it (time to first token and response p50/p95/p99, throughput,
+  503 and `Retry-After`, fairness, FIFO inversions), a soak of 10 minutes or
+  more, and llama.cpp on the same ids when a GGUF and a llama-server are
+  given. The verdict, `out/bench/<sha>.json`, and its Markdown report say
+  the machine, the driver, the runner and the repetitions of every number; a
+  model absent or too large for the card is skipped with why, never green.
+  Each GPU's figures are held to `ci/bench-baseline.json` with a tolerance
+  per tier, empty until the first run on the card. Its GPU runs without
+  confidential computing: no figure of it goes into `docs/benchmarks.md`,
+  which describes the suite under "The suite". The tiers are tested without
+  a card against a fake runner (`ci/tests/bench.sh`, in `make ci`); none has
+  run on a GPU yet. Nothing served changes.
+- `backend::ChatRefused` (2026-11-10): a backend that renders a chat
+  template may refuse messages the template refuses (a conversation that
+  starts with an assistant message, for one); the server answers that
+  request 400 with the reason, as it does for the other refusals of a
+  backend. Neither candle nor x0ne Core returns it.
+- Tests of what the code did and no test held (2026-11-10):
+  - on the attested channel, a peer that shows the right certificate and
+    signs the TLS 1.3 handshake with another key is refused with
+    `BadSignature`, by the relay and by the TD (`tls.rs`);
+  - a request sealed to the TD's key for any route of the TD's router but
+    `POST /v1/chat/completions`, or for another spelling of that route, gets
+    the refusal of a request that does not open, and the model does not run
+    (`e2e_td_tests.rs`, the routes read from the source);
+  - a QE identity rewritten to name another quoting enclave is refused at
+    its signature, on the quote and collateral that pass intact
+    (`tcb_policy_live.rs`);
+  - the padding of every build that serves is 100 ms ticks, ten at least:
+    `padding::Tick` has no field and one value outside `cfg(test)`, and no
+    flag, variable or configuration field reaches it
+    (`tests/cloud_source_sweep.rs`); under `cfg(test)`, the unit tests that
+    assert no time take a 5 ms tick;
+  - seeded properties for schemas, streams and admission
+    (`generation_prop_tests.rs`, `service_prop_tests.rs`), which found the
+    `json_schema` and caller defects above, and seeded mutations of every
+    parser of hostile bytes from the real fixtures (`fuzz/README.md`), which
+    found the `Date` header, TDVF and Intel `signatureAlgorithm` defects
+    above;
+  - the TD's head-timeout test starts its clock before its TLS handshake,
+    and the scenario of bodies past their cap reads the 413 through a client
+    that keeps what came before a reset: both failed now and then under load
+    with no defect of the server.
+
 ## 0.2.0-beta.7 — 2026-11-07
 
 This version's number was set on 2026-10-18, by the entries at the end of

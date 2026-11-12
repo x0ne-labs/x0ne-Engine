@@ -198,9 +198,30 @@ fn workspace_dirs(dir: &str, out: &mut BTreeSet<String>) {
     }
 }
 
+/// The workspaces a tree may add, which the root's walk does not reach: each directory whose
+/// `Cargo.toml` has a `[workspace]` table, the root neither listing nor excluding it. Each
+/// lists its crates in its own `LICENSING.md`, the same table.
+fn other_workspaces() -> BTreeSet<String> {
+    let mut reached = BTreeSet::new();
+    workspace_dirs("", &mut reached);
+    let mut dirs = BTreeSet::new();
+    manifest_dirs(&root(), "", &mut dirs);
+    let mut out = BTreeSet::new();
+    for d in dirs {
+        if manifest(&d).contains_key("workspace") && !reached.contains(&d) {
+            workspace_dirs(&d, &mut reached);
+            out.insert(d);
+        }
+    }
+    out
+}
+
 fn crates() -> Vec<Crate> {
     let mut out = Vec::new();
     workspace("", &mut out);
+    for w in other_workspaces() {
+        workspace(&w, &mut out);
+    }
     out
 }
 
@@ -237,10 +258,20 @@ fn section<'a>(text: &'a str, heading: &str) -> &'a str {
     }
 }
 
-/// The rows of LICENSING.md's crate table: name -> (directory, license).
+/// The rows of LICENSING.md's crate table, and of the `LICENSING.md` of each other workspace:
+/// name -> (directory, license).
 fn licensing_map() -> BTreeMap<String, (String, String)> {
-    let text = read("LICENSING.md");
     let mut rows = BTreeMap::new();
+    licensing_rows("LICENSING.md", &mut rows);
+    for w in other_workspaces() {
+        licensing_rows(&join(&w, "LICENSING.md"), &mut rows);
+    }
+    rows
+}
+
+/// The rows of the crate table of the map at `rel` into `rows`, each name once in all of them.
+fn licensing_rows(rel: &str, rows: &mut BTreeMap<String, (String, String)>) {
+    let text = read(rel);
     for line in section(&text, "The crates")
         .lines()
         .filter(|l| l.starts_with("| `"))
@@ -251,16 +282,15 @@ fn licensing_map() -> BTreeMap<String, (String, String)> {
             .split('|')
             .map(str::trim)
             .collect();
-        assert!(cells.len() >= 3, "LICENSING.md: a short row: {line}");
+        assert!(cells.len() >= 3, "{rel}: a short row: {line}");
         let name = cells[0].trim_matches('`').to_string();
         let dir = cells[1].trim_matches('`').to_string();
         let license = cells[2].trim_matches('`').to_string();
         assert!(
             rows.insert(name.clone(), (dir, license)).is_none(),
-            "LICENSING.md lists {name} twice"
+            "{rel}: {name} is listed twice"
         );
     }
-    rows
 }
 
 /// The files LICENSING.md lists as x0ne-infer's files compiled into
@@ -368,6 +398,7 @@ fn licensing_md_lists_every_crate_with_the_license_its_manifest_declares() {
     // The workspaces the walk reached without a crate of their own: the root, x0ne-core.
     let mut roots = BTreeSet::new();
     workspace_dirs("", &mut roots);
+    roots.extend(other_workspaces());
     for w in roots {
         if !manifest(&w).contains_key("package") {
             dirs.remove(&w);

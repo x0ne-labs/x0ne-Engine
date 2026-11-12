@@ -29,7 +29,12 @@ X0NE_INFER_KEY_HEX=<hex> target/release/x0ne-infer \
 Every failure before the socket is bound exits with a distinct code and a
 named reason; nothing binds, nothing decrypts. The server speaks plain HTTP
 and serves one generation at a time: one runs, `--max-queue` (8) may wait,
-and the next gets 503 with `Retry-After`. A panic while serving a request is
+and the next gets 503 with `Retry-After`. A request has 30 s from its queue
+place to send its whole body: past it, it gets 408 and its place is free. A
+connection has 61 minutes to send each request head, counted from its accept
+or from the end of the answer before: it is closed otherwise, idle or slow,
+and an answer is not timed by this. The number of connections is not
+bounded. A panic while serving a request is
 a 500 for that request; the next one is served. A request whose `Host` is not
 `localhost`, `127.0.0.1` or `[::1]` (any port), or a name given with
 `--allow-host <host[:port]>`, gets 421: a web page whose name an attacker
@@ -54,14 +59,16 @@ only inside an attested enclave, so it ships in the confidential VM's image
 only, built with x0ne Core (`cuda nvml`) by the x0ne OS image build
 ([ci-local.md](ci-local.md#which-recipe-reproduces-which-binary)).
 
-Do not have a confidential machine? `x0ne-infer/scripts/gcp-cvm.sh`
-provisions one on GCP and runs the sequence, one phase at a time — it is the
-recipe of the attested run of 2026-08-20 (its header), about ten minutes of
-billed VM. It predates x0ne Core and has not been run with it: by default it
-builds without `cuda` and starts the server with `--device cpu`, which this
-version refuses (exit 90).
-It downloads a public model in the clear and generates a random key on the
-VM, so it does not exercise sealed weights:
+`x0ne-infer/scripts/gcp-cvm.sh` does not serve with this version as it
+stands. It is the recipe of the attested run of 2026-08-20 (its header):
+it provisioned a confidential machine on GCP and ran the sequence, one phase
+at a time, about ten minutes of billed VM. It predates x0ne Core and has not
+been run with it: by default it builds without `cuda` and starts the server
+with `--device cpu`, which this version refuses (exit 90). No other recipe
+in this repository brings up a confidential machine outside
+`x0ne-engine cloud`. It downloaded a public model in the clear and generated
+a random key on the VM, so it did not exercise sealed weights. Its phases,
+kept as the record of that run:
 
 ```sh
 x0ne-infer/scripts/gcp-cvm.sh create   # then wait-ssh, driver, reboot,

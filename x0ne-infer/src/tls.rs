@@ -466,6 +466,157 @@ mod tests {
         assert_eq!(pin.pinned(), Some(server_a.spki_sha256()));
     }
 
+    // ── Possession: a certificate is public, its key is not ─────────────────
+
+    /// A peer that shows the certificate of `cert_of` and signs the
+    /// handshake with the key of `key_of`: `CertifiedKey::new` does not
+    /// compare them, as someone who copied a certificate off the wire would not.
+    #[derive(Debug)]
+    struct Shows(Arc<rustls::sign::CertifiedKey>);
+
+    impl Shows {
+        fn new(cert_of: &TlsIdentity, key_of: &TlsIdentity) -> Arc<Self> {
+            let key = rustls::crypto::ring::sign::any_supported_type(&key_of.private_key())
+                .expect("a P-256 key");
+            Arc::new(Self(Arc::new(rustls::sign::CertifiedKey::new(
+                vec![cert_of.cert.clone()],
+                key,
+            ))))
+        }
+    }
+
+    impl rustls::server::ResolvesServerCert for Shows {
+        fn resolve(
+            &self,
+            _: rustls::server::ClientHello<'_>,
+        ) -> Option<Arc<rustls::sign::CertifiedKey>> {
+            Some(self.0.clone())
+        }
+    }
+
+    impl rustls::client::ResolvesClientCert for Shows {
+        fn resolve(
+            &self,
+            _: &[&[u8]],
+            _: &[SignatureScheme],
+        ) -> Option<Arc<rustls::sign::CertifiedKey>> {
+            Some(self.0.clone())
+        }
+        fn has_certs(&self) -> bool {
+            true
+        }
+    }
+
+    /// One connection: the handshake, then four bytes echoed; or why not.
+    async fn one_handshake(
+        config: Arc<rustls::ServerConfig>,
+    ) -> (
+        std::net::SocketAddr,
+        tokio::task::JoinHandle<Result<(), String>>,
+    ) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let acceptor = tokio_rustls::TlsAcceptor::from(config);
+        let handle = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.map_err(|e| e.to_string())?;
+            let mut tls = acceptor.accept(tcp).await.map_err(|e| e.to_string())?;
+            let mut buf = [0u8; 4];
+            tls.read_exact(&mut buf).await.map_err(|e| e.to_string())?;
+            tls.write_all(&buf).await.map_err(|e| e.to_string())?;
+            Ok(())
+        });
+        (addr, handle)
+    }
+
+    /// A server that asks no client certificate and shows `cert_of`'s,
+    /// signing with `key_of`'s key.
+    fn server_showing(cert_of: &TlsIdentity, key_of: &TlsIdentity) -> Arc<rustls::ServerConfig> {
+        let mut config = rustls::ServerConfig::builder_with_provider(provider())
+            .with_protocol_versions(&[&rustls::version::TLS13])
+            .unwrap()
+            .with_no_client_auth()
+            .with_cert_resolver(Shows::new(cert_of, key_of));
+        config.alpn_protocols = vec![ALPN_HTTP1.to_vec()];
+        Arc::new(config)
+    }
+
+    /// Our client's verifier, offering `cert_of`'s certificate and signing
+    /// with `key_of`'s key.
+    fn client_showing(
+        cert_of: &TlsIdentity,
+        key_of: &TlsIdentity,
+        pin: Arc<ServerPin>,
+    ) -> rustls::ClientConfig {
+        let provider = provider();
+        let mut config = rustls::ClientConfig::builder_with_provider(provider.clone())
+            .with_protocol_versions(&[&rustls::version::TLS13])
+            .unwrap()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(PinOnFirstUse {
+                pin,
+                algs: provider.signature_verification_algorithms,
+            }))
+            .with_client_cert_resolver(Shows::new(cert_of, key_of));
+        config.alpn_protocols = vec![ALPN_HTTP1.to_vec()];
+        config.resumption = rustls::client::Resumption::disabled();
+        config
+    }
+
+    /// SECURITY (possession, server side): a server that shows the TD's
+    /// certificate, the one whose SPKI the quote names, and signs the
+    /// handshake with another key gets no session from our client. The pin
+    /// alone would pass it: the certificate is the attested one.
+    #[tokio::test]
+    async fn a_server_showing_the_td_certificate_without_its_key_is_refused() {
+        let td = TlsIdentity::generate("x0ne-infer").unwrap();
+        let thief = TlsIdentity::generate("x0ne-infer").unwrap();
+        let client = TlsIdentity::generate("x0ne-engine-proxy").unwrap();
+
+        // Control: the same server with the certificate's own key is served.
+        let (addr, srv) = one_handshake(server_showing(&td, &td)).await;
+        let pin = ServerPin::new();
+        connect(addr, client_config(&client, pin.clone()).unwrap())
+            .await
+            .expect("the certificate with its key");
+        assert_eq!(srv.await.unwrap(), Ok(()));
+        assert_eq!(pin.pinned(), Some(td.spki_sha256()));
+
+        let (addr, srv) = one_handshake(server_showing(&td, &thief)).await;
+        let pin = ServerPin::new();
+        let err = connect(addr, client_config(&client, pin.clone()).unwrap())
+            .await
+            .expect_err("a certificate without its key");
+        assert!(err.contains("BadSignature"), "{err}");
+        assert!(srv.await.unwrap().is_err(), "the thief got a session");
+        // The certificate shown was the TD's: the pin is not what refused.
+        assert_eq!(pin.pinned(), Some(td.spki_sha256()));
+        assert_eq!(pin.checks(), 1);
+    }
+
+    /// SECURITY (possession, TD side): a client that shows the relay's
+    /// certificate, the one the config names, and signs with another key is
+    /// refused at the handshake by the TD.
+    #[tokio::test]
+    async fn a_client_showing_the_relays_certificate_without_its_key_is_refused() {
+        let td = TlsIdentity::generate("x0ne-infer").unwrap();
+        let relay = TlsIdentity::generate("x0ne-engine-proxy").unwrap();
+        let thief = TlsIdentity::generate("x0ne-engine-proxy").unwrap();
+
+        // Control: the same client with the certificate's own key is served.
+        let (addr, srv) = one_handshake(server_config(&td, relay.spki_sha256()).unwrap()).await;
+        connect(addr, client_showing(&relay, &relay, ServerPin::new()))
+            .await
+            .expect("the certificate with its key");
+        assert_eq!(srv.await.unwrap(), Ok(()));
+
+        let (addr, srv) = one_handshake(server_config(&td, relay.spki_sha256()).unwrap()).await;
+        connect(addr, client_showing(&relay, &thief, ServerPin::new()))
+            .await
+            .expect_err("a certificate without its key");
+        let err = srv.await.unwrap().expect_err("the thief got a session");
+        assert!(err.contains("BadSignature"), "{err}");
+    }
+
     #[test]
     fn the_spki_pin_is_the_certificates_public_key_not_the_certificate() {
         let id = TlsIdentity::generate("x").unwrap();

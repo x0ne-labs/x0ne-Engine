@@ -245,9 +245,8 @@ mod tests {
     /// The 2026-10-17 TD report (the fixtures keep no signature), signed
     /// under the root of the `pcs` tests.
     fn quote_1017() -> (Vec<u8>, TrustAnchor) {
-        let mut quote = vec![0u8; 48];
-        quote[0] = 4;
-        quote[4] = 0x81;
+        let mut quote = crate::pcs::tests::td_quote_header_and_body();
+        quote.truncate(48);
         quote.extend_from_slice(TDREPORT);
         let fx = crate::pcs::tests::fixture_signing(&quote);
         (fx.quote, TrustAnchor::RootDer(fx.root_der))
