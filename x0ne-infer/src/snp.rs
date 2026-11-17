@@ -3169,13 +3169,17 @@ pub(crate) mod tests {
             let signed = ask.tbs_certificate.as_ref();
             let signature: &[u8] = ask.signature_value.data.as_ref();
             assert_eq!(signature.len(), 512, "{name}: RSA-4096");
-            pss_verify(alg, &key, signed, signature, name)
-                .unwrap_or_else(|e| panic!("AMD's own signature: {e}"));
+            // The messages name the case, not the refusal: the reason quotes the certificate.
+            assert!(
+                pss_verify(alg, &key, signed, signature, name).is_ok(),
+                "{name}: AMD's own signature is refused"
+            );
 
             let refused = |key: &RsaPublicKey, signed: &[u8], signature: &[u8], what: &str| {
-                let e = pss_verify(alg, key, signed, signature, name)
-                    .expect_err(&format!("{name}: {what} is accepted"));
-                assert!(e.contains("does not verify"), "{name}: {what}: {e}");
+                assert!(
+                    matches!(pss_verify(alg, key, signed, signature, name), Err(e) if e.contains("does not verify")),
+                    "{name}: {what}: accepted, or refused for another reason"
+                );
             };
             for at in [signature.len() - 1, signature.len() / 2] {
                 let mut changed = signature.to_vec();

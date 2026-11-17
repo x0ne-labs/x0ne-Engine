@@ -2158,7 +2158,7 @@ pub(crate) mod tests {
             let (_, leaf) = X509Certificate::from_der(der).expect("still a certificate");
             verify_leaf_signature(&leaf, &inter, NrasLeafSignature::RsaPkcs1Sha256)
         };
-        check(L004).expect("NVIDIA's own signature");
+        assert!(check(L004).is_ok(), "NVIDIA's own signature is refused");
 
         // Where the leaf's key bits sit: inside the signed part, read by no check here.
         let (signed_at, signature_len) = {
@@ -2183,12 +2183,11 @@ pub(crate) mod tests {
         ] {
             let mut changed = L004.to_vec();
             changed[at] ^= 1;
-            match check(&changed) {
-                Err(NrasRejected::LeafNotPinnedIssuer(why)) => {
-                    assert!(why.contains("does not verify"), "{what}: {why}");
-                }
-                other => panic!("{what}: {other:?}"),
-            }
+            // The message names the bit, not the refusal: the reason quotes the certificate.
+            assert!(
+                matches!(check(&changed), Err(NrasRejected::LeafNotPinnedIssuer(why)) if why.contains("does not verify")),
+                "{what}: accepted, or refused for another reason"
+            );
         }
     }
 
