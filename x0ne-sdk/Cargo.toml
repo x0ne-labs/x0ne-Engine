@@ -59,8 +59,9 @@ x509-parser = "0.18.1"
 p384 = { version = "0.14.0", default-features = false, features = ["ecdsa", "pkcs8"] }
 # Google's launch endorsement (gce_endorsement.rs): RSASSA-PSS verification only;
 # NRAS leaves under Intermediate 004 (nras.rs): PKCS#1 v1.5.
-# No default features: `std` brings `getrandom` through rand_core.
-rsa = { version = "0.9.10", default-features = false, features = ["sha2", "u64_digit"] }
+# No default features: `getrandom` is one of them. `encoding` reads keys (SPKI),
+# `pkcs1v15` is opt-in since rsa 0.10.
+rsa = { version = "0.10.0", default-features = false, features = ["encoding", "pkcs1v15"] }
 # x0ne's archive key (openpgp.rs): OpenPGP v4 fingerprints are SHA-1. The
 # version x0ne-infer already locks.
 sha1 = "0.11"

@@ -48,11 +48,11 @@
 
 use crate::nras_ocsp::{NrasOcspPolicy, OcspRefused, OcspStanding};
 use base64::Engine;
+// One trait for both: p384 and rsa 0.10 are on the same `signature` crate.
 use p384::ecdsa::signature::Verifier as _;
 use rsa::pkcs1v15::{Signature as RsaSignature, VerifyingKey as RsaVerifyingKey};
 use rsa::pkcs8::DecodePublicKey;
-use rsa::signature::Verifier as _;
-use rsa::RsaPublicKey;
+use rsa::PublicKey as RsaPublicKey;
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
 use x509_parser::prelude::{FromDer, X509Certificate};
@@ -584,10 +584,7 @@ fn verify_leaf_signature(
                 .map_err(|e| bad(format!("intermediate key is not RSA: {e}")))?;
             let sig =
                 RsaSignature::try_from(sig).map_err(|e| bad(format!("leaf signature: {e}")))?;
-            // `rsa::sha2`, not `sha2`: rsa 0.9 is on the previous `digest` generation
-            // (its 0.10 is still a release candidate, 2026-09-18) and only accepts
-            // the hasher it re-exports. Collapses back to one `sha2` when rsa moves.
-            RsaVerifyingKey::<rsa::sha2::Sha256>::new(key)
+            RsaVerifyingKey::<sha2::Sha256>::new(key)
                 .verify(tbs, &sig)
                 .map_err(|_| bad("leaf signature does not verify".into()))
         }
@@ -1009,7 +1006,7 @@ pub(crate) mod tests {
             // generate with the rsa crate and wrap).
             Inter::Rsa => {
                 let mut rng = rsa_test_rng();
-                let sk = rsa::RsaPrivateKey::new(&mut rng, 2048).expect("rsa key");
+                let sk = rsa::PrivateKey::new(&mut rng, 2048).expect("rsa key");
                 let kp = KeyPair::from_pkcs8_pem_and_sign_algo(
                     &rsa_to_pkcs8_pem(&sk),
                     &rcgen::PKCS_RSA_SHA256,
@@ -1596,18 +1593,8 @@ pub(crate) mod tests {
         counter: u64,
         buf: Vec<u8>,
     }
-    impl rsa::rand_core::RngCore for CounterRng {
-        fn next_u32(&mut self) -> u32 {
-            let mut b = [0u8; 4];
-            self.fill_bytes(&mut b);
-            u32::from_le_bytes(b)
-        }
-        fn next_u64(&mut self) -> u64 {
-            let mut b = [0u8; 8];
-            self.fill_bytes(&mut b);
-            u64::from_le_bytes(b)
-        }
-        fn fill_bytes(&mut self, dest: &mut [u8]) {
+    impl CounterRng {
+        fn fill(&mut self, dest: &mut [u8]) {
             for d in dest.iter_mut() {
                 if self.buf.is_empty() {
                     self.counter += 1;
@@ -1616,12 +1603,26 @@ pub(crate) mod tests {
                 *d = self.buf.pop().unwrap();
             }
         }
-        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rsa::rand_core::Error> {
-            self.fill_bytes(dest);
+    }
+    // rand_core 0.10: an infallible `TryRng` is an `Rng`, and with the marker a `CryptoRng`.
+    impl rsa::rand_core::TryRng for CounterRng {
+        type Error = std::convert::Infallible;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            let mut b = [0u8; 4];
+            self.fill(&mut b);
+            Ok(u32::from_le_bytes(b))
+        }
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            let mut b = [0u8; 8];
+            self.fill(&mut b);
+            Ok(u64::from_le_bytes(b))
+        }
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
+            self.fill(dest);
             Ok(())
         }
     }
-    impl rsa::rand_core::CryptoRng for CounterRng {}
+    impl rsa::rand_core::TryCryptoRng for CounterRng {}
 
     pub(crate) fn rsa_test_rng() -> CounterRng {
         CounterRng {
@@ -1630,7 +1631,7 @@ pub(crate) mod tests {
         }
     }
 
-    pub(crate) fn rsa_to_pkcs8_pem(sk: &rsa::RsaPrivateKey) -> String {
+    pub(crate) fn rsa_to_pkcs8_pem(sk: &rsa::PrivateKey) -> String {
         use rsa::pkcs8::EncodePrivateKey;
         sk.to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
             .unwrap()
@@ -1978,7 +1979,7 @@ pub(crate) mod tests {
             counter: 1_000_000,
             buf: Vec::new(),
         };
-        let leaf_rsa = rsa::RsaPrivateKey::new(&mut rng, 2048).unwrap();
+        let leaf_rsa = rsa::PrivateKey::new(&mut rng, 2048).unwrap();
         let leaf_kp = KeyPair::from_pkcs8_pem_and_sign_algo(
             &rsa_to_pkcs8_pem(&leaf_rsa),
             &rcgen::PKCS_RSA_SHA256,
@@ -2142,6 +2143,52 @@ pub(crate) mod tests {
                 ),
                 "{name} presented with the other intermediate"
             );
+        }
+    }
+
+    /// SECURITY: NVIDIA's real leaf under 004 carries a signature this crate did
+    /// not make, PKCS#1 v1.5 with SHA-256 under a 2048-bit key. It verifies, and
+    /// one flipped bit refuses it: in the signature, or in what it signs. A
+    /// failure means the RSA check accepts what NVIDIA did not sign, or refuses
+    /// what it did.
+    #[test]
+    fn nvidias_real_rsa_signature_verifies_and_one_flipped_bit_refuses_it() {
+        let (_, inter) = X509Certificate::from_der(I004).unwrap();
+        let check = |der: &[u8]| {
+            let (_, leaf) = X509Certificate::from_der(der).expect("still a certificate");
+            verify_leaf_signature(&leaf, &inter, NrasLeafSignature::RsaPkcs1Sha256)
+        };
+        check(L004).expect("NVIDIA's own signature");
+
+        // Where the leaf's key bits sit: inside the signed part, read by no check here.
+        let (signed_at, signature_len) = {
+            let (_, leaf) = X509Certificate::from_der(L004).unwrap();
+            let key = &leaf.public_key().subject_public_key.data;
+            assert!(L004.ends_with(&leaf.signature_value.data));
+            (
+                key.as_ptr() as usize - L004.as_ptr() as usize + key.len() / 2,
+                leaf.signature_value.data.len(),
+            )
+        };
+        assert_eq!(signature_len, 256, "RSA-2048");
+        assert!(signed_at < L004.len() - signature_len);
+
+        for (at, what) in [
+            (L004.len() - 1, "the last bit of the signature"),
+            (
+                L004.len() - signature_len / 2,
+                "a bit in the middle of the signature",
+            ),
+            (signed_at, "a bit of what is signed"),
+        ] {
+            let mut changed = L004.to_vec();
+            changed[at] ^= 1;
+            match check(&changed) {
+                Err(NrasRejected::LeafNotPinnedIssuer(why)) => {
+                    assert!(why.contains("does not verify"), "{what}: {why}");
+                }
+                other => panic!("{what}: {other:?}"),
+            }
         }
     }
 

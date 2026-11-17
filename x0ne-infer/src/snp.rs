@@ -56,7 +56,7 @@
 
 use rsa::pkcs8::DecodePublicKey as _;
 use rsa::signature::Verifier as _;
-use rsa::RsaPublicKey;
+use rsa::PublicKey as RsaPublicKey;
 use sha2::{Digest, Sha256};
 use x0ne_confidential::model::Measurement;
 use x0ne_confidential::policy::ExpectedMeasurement;
@@ -1395,10 +1395,8 @@ fn pss_verify(
             "{what}: PSS parameters are not SHA-384/MGF1-SHA-384/salt 48"
         ));
     }
-    let vk = rsa::pss::VerifyingKey::<rsa::sha2::Sha384>::new_with_salt_len(
-        issuer.clone(),
-        PSS_SALT_LEN,
-    );
+    let vk =
+        rsa::pss::VerifyingKey::<sha2::Sha384>::new_with_salt_len(issuer.clone(), PSS_SALT_LEN);
     let sig =
         rsa::pss::Signature::try_from(signature).map_err(|e| format!("{what}: signature: {e}"))?;
     vk.verify(signed, &sig)
@@ -3148,6 +3146,55 @@ pub(crate) mod tests {
             (AMD_TURIN_CRL, "949c93ca"),
         ] {
             assert!(hex(&Sha256::digest(der)).starts_with(sha), "{sha}");
+        }
+    }
+
+    /// SECURITY: AMD's real ASK certificates carry signatures this crate did not
+    /// make, RSASSA-PSS with SHA-384 under the 4096-bit ARK. Each verifies under
+    /// its own ARK, and is refused with one flipped bit, in the signature or in
+    /// what it signs, and under another product's ARK. A failure means the PSS
+    /// check accepts what AMD did not sign, or refuses what it did.
+    #[test]
+    fn amds_real_pss_signatures_verify_and_one_flipped_bit_refuses_them() {
+        let chains = [
+            (AMD_ARK_MILAN_DER, AMD_ASK_MILAN_DER, "Milan"),
+            (AMD_ARK_GENOA_DER, AMD_ASK_GENOA_DER, "Genoa"),
+            (AMD_ARK_TURIN_DER, AMD_ASK_TURIN_DER, "Turin"),
+        ];
+        for (i, (ark, ask, name)) in chains.iter().enumerate() {
+            let (_, ark) = X509Certificate::from_der(ark).unwrap();
+            let key = rsa_key(&ark).unwrap();
+            let (_, ask) = X509Certificate::from_der(ask).unwrap();
+            let alg = &ask.signature_algorithm;
+            let signed = ask.tbs_certificate.as_ref();
+            let signature: &[u8] = ask.signature_value.data.as_ref();
+            assert_eq!(signature.len(), 512, "{name}: RSA-4096");
+            pss_verify(alg, &key, signed, signature, name)
+                .unwrap_or_else(|e| panic!("AMD's own signature: {e}"));
+
+            let refused = |key: &RsaPublicKey, signed: &[u8], signature: &[u8], what: &str| {
+                let e = pss_verify(alg, key, signed, signature, name)
+                    .expect_err(&format!("{name}: {what} is accepted"));
+                assert!(e.contains("does not verify"), "{name}: {what}: {e}");
+            };
+            for at in [signature.len() - 1, signature.len() / 2] {
+                let mut changed = signature.to_vec();
+                changed[at] ^= 1;
+                refused(&key, signed, &changed, "a signature with one flipped bit");
+            }
+            let mut changed = signed.to_vec();
+            changed[signed.len() / 2] ^= 1;
+            refused(
+                &key,
+                &changed,
+                signature,
+                "a signed part with one flipped bit",
+            );
+
+            let (other_ark, _, _) = chains[(i + 1) % chains.len()];
+            let (_, other_ark) = X509Certificate::from_der(other_ark).unwrap();
+            let other_key = rsa_key(&other_ark).unwrap();
+            refused(&other_key, signed, signature, "another product's ARK");
         }
     }
 

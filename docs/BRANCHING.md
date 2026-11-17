@@ -57,7 +57,11 @@ workspace; tag `vX.Y.Z` equals it. Pre-releases: `-alpha.N`, `-beta.N`, `-rc.N`.
 5. `git push origin refs/tags/vX.Y.Z`; the release workflow builds, checksums
    and attests the artifacts, installs the archive with `install.sh` in
    Debian 13, Ubuntu 24.04 and Fedora 43 (refused on Alpine 3) and the `.deb`
-   with `dpkg` in Debian 13 and Ubuntu 24.04, then drafts the release.
+   with `dpkg` in Debian 13 and Ubuntu 24.04, then drafts the release. Its
+   last job, the one that signs the provenance and writes the draft, reaches
+   only the hosts listed in the workflow (harden-runner, `egress-policy:
+   block`): a release that needs another host fails there, before the draft
+   exists, and the list has to gain it under a new tag.
 6. The draft's notes are the `CHANGELOG.md` section, or a link to it when the
    section is over the 125,000 characters GitHub takes; edit them if needed
    (`gh release edit --notes-file`), and check the artifacts download and verify.

@@ -771,7 +771,7 @@ fn the_small_text_formats_cut_or_changed_never_panic_and_parse_to_one_meaning() 
 
     // The relay's control lines, written by the cloud CLI.
     const CONNECT: &str =
-        r#"{"v":1,"cmd":"connect","endpoint":"10.0.0.2:8443","boot_deadline_unix":1792666540}"#;
+        r#"{"v":1,"cmd":"connect","endpoint":"192.0.2.2:8443","boot_deadline_unix":1792666540}"#;
     assert!(matches!(parse_cmd(CONNECT), Cmd::Connect { .. }));
     for p in prefixes(CONNECT.as_bytes()) {
         let p = std::str::from_utf8(p).expect("ASCII");

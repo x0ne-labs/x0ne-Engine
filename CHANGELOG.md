@@ -7,6 +7,113 @@ the first non-beta tag will freeze the receipt protocol below.
 
 ### Security
 
+- The Go program that made the other transparency-log test data
+  (`x0ne-infer/tests/tlog/go-src`) moves to golang.org/x/mod v0.40.0 and
+  golang.org/x/crypto v0.59.0 (2026-11-17), the first versions the Go
+  vulnerability database lists nothing against: it listed GO-2026-6179 and
+  GO-2026-6180 against x/mod v0.36.0 and four entries against x/crypto
+  v0.52.0, in code this program does not call or build. x/crypto v0.59.0
+  requires Go 1.26: the `go` line of its `go.mod` goes from 1.25.0 to
+  1.26.0. The test data is unchanged, but for the cosignature lines that
+  carry their time (`x0ne-infer/tests/VENDORED.md`). `.github/dependabot.yml`
+  reads this module too.
+- The Go program that made the Tessera test data
+  (`x0ne-infer/tests/tlog/tessera-src`) moves to golang.org/x/crypto v0.59.0
+  and golang.org/x/mod v0.40.0 (2026-11-17), the first versions the Go
+  vulnerability database lists nothing against. It listed four entries
+  against x/crypto v0.52.0, in the `ssh` and `openpgp` packages
+  (GO-2026-5932, GO-2026-6303, GO-2026-6354, GO-2026-6355), and two against
+  x/mod v0.33.0, in `sumdb` and `sumdb/tlog` (GO-2026-6179, GO-2026-6180);
+  the program builds none of those packages. Nothing else moves in its
+  `go.mod`, and the test data is unchanged, measured as for the move below.
+- The Go program that made the Tessera test data
+  (`x0ne-infer/tests/tlog/tessera-src`) moves to go.opentelemetry.io/otel,
+  otel/metric and otel/trace v1.47.0 (2026-11-17), past GHSA-q7gw-24fr-5p69
+  in otel/trace. Nothing builds or ships that program. otel v1.47.0 requires
+  Go 1.26: the `go` line of its `go.mod` goes from 1.25.0 to 1.26.0, with
+  logr v1.4.4 and the sibling module otel/log v1.47.0, both indirect. The
+  test data is unchanged: made again with Go 1.26.11, before and after the
+  move, it differs from the files kept only by the witness cosignature
+  lines, which carry the time they are made (`x0ne-infer/tests/VENDORED.md`).
+- The `release` job of `.github/workflows/release.yml`, the one that holds
+  the token to sign the provenance and to write the draft, runs
+  harden-runner with `egress-policy: block` (2026-11-17): it reaches nine
+  entries on port 443 and nothing else. The list is what the job reached on
+  the release of v0.2.0-beta.7 (run 42494524964, 2026-11-08, the same action
+  versions): `github.com`, `api.github.com`, `uploads.github.com`,
+  `fulcio.sigstore.dev`, `rekor.sigstore.dev` and GitHub's own Actions
+  services. Two of those change name from one run to the next, the runner's
+  service and the storage account of the artifacts (eleven accounts on
+  fifteen runs of this repository), and are written as the patterns
+  `*.actions.githubusercontent.com` and
+  `productionresultssa*.blob.core.windows.net`. No release has run with the
+  list yet. The four other jobs stay in `audit`: their hosts were not
+  measured. `docs/BRANCHING.md` says what a missing host does.
+- `rsa` 0.10.0 replaces 0.9.10 in the root's and local mode's locks
+  (2026-11-17): RUSTSEC-2023-0071, the Marvin timing sidechannel, is fixed
+  there, and its ignore leaves `.cargo/audit.toml`, `deny.toml` and local
+  mode's `deny.toml`; `cargo audit` (0.22.2, RustSec database at its commit
+  02e2517) finds no vulnerability with nothing ignored. The move adds one
+  crate to the locks, `crypto-primes` 0.7.2, which `rsa` uses to generate
+  keys and which only the tests call; `pkcs1` goes to 0.8.0, `crypto-bigint`
+  to 0.7.11, `spki` to 0.8.1, and thirteen crates of the previous RustCrypto
+  generation leave (`num-bigint-dig`, `rand` 0.8, `signature` 2 among them).
+  PKCS#1 v1.5 is an opt-in feature of `rsa` 0.10: `pkcs1v15` is on, for the
+  NRAS leaf and the OCSP responses. Nothing changes in what is verified: two
+  tests added before the move hold real signatures, NVIDIA's leaf under
+  intermediate 004 and AMD's ASK certificates, and refuse them with one bit
+  flipped. SECURITY.md keeps the paragraph, rewritten;
+  `THIRD_PARTY_LICENSES.html` is regenerated.
+- `.github/dependabot.yml` covers two manifests it did not read
+  (2026-11-17): x0ne Core's workspace (`x0ne-core/Cargo.lock`), in the same
+  `cargo` entry as the root so that one proposal moves the two locks, and
+  the `go.mod` of the program that made the Tessera test data
+  (`x0ne-infer/tests/tlog/tessera-src`, a new `gomod` entry), where GitHub
+  had reported an advisory with no proposal to follow. Nothing builds or
+  ships that program; a bump there moves `go.mod` and `go.sum`, and the test
+  data is not made again by it.
+- The root's and local mode's locks move to `quinn-proto` 0.11.19 and
+  `quinn-udp` 0.5.16 (2026-11-17), past RUSTSEC-2026-0523, 0524 and 0538,
+  which `cargo audit` (cargo-audit 0.22.2, RustSec database at its commit
+  02e2517) reported that day and `cargo deny` as configured did not. `quinn`
+  is in `Cargo.lock` as an optional dependency of `reqwest` that no feature
+  of the workspace enables: `cargo tree --workspace --all-features --target
+  all -i` prints nothing for either crate, so no build changes. Only the
+  version and the checksum of the two crates moved in each lock.
+  SECURITY.md records the run that followed: no vulnerability, the `paste`
+  warning. FEATURES.md no longer names the `zip` ignores, removed on
+  2026-11-14.
+- `deny.toml` and `.cargo/audit.toml` no longer ignore RUSTSEC-2026-0367,
+  0368, 0369 and 0429 (2026-11-14): with `zip` 9.5.1 none of them matches,
+  and `cargo deny check` passes without them. The two SECURITY.md paragraphs
+  that justified them go, and so does the test that held them
+  (`security_doc::the_zip_ignores_hold_only_while_nothing_opens_an_archive`).
+- candle 0.11.1, the CPU reference of the tests, replaces 0.11.0
+  (2026-11-14): candle-core 0.11.0 required `zip` ^8.6, and the lock moves to
+  `zip` 9.5.1, past RUSTSEC-2026-0367, 0368, 0369 and 0429 (fixed in 9.0.0)
+  and GHSA-m665-v7pm-7grj (fixed in 9.0.5). Neither `zip` nor candle is in a
+  build that ships: `cargo tree -e normal -i zip` finds nothing for the
+  image's build (features `cuda nvml`) nor for the .deb's, and both builds
+  have the same packages before and after (277 and 274). In both, tempfile
+  now takes getrandom 0.4.3, already among them, instead of 0.3.4. The
+  tests' `tokenizers` is now `x0ne-infer`'s own, 0.23.2, with candle's
+  `fancy-regex` feature added, which its default `onig` leaves uncompiled.
+- The locks move to rustix 1.1.6 (2026-11-14), the root's, local mode's and
+  x0ne-core's, past RUSTSEC-2026-0486 (unsound), which `cargo deny` as configured did not
+  report. Given a zero-length buffer, rustix's xattr functions (`getxattr`,
+  `listxattr` and their `l` and `f` variants) marked bytes the system never
+  wrote as initialized. rustix comes through tempfile, in the served builds
+  too; no source of the workspace and no vendored crate calls these
+  functions (grep, that day).
+- The generator of the Tessera test log, `x0ne-infer/tests/tlog/tessera-src`,
+  requires golang.org/x/crypto v0.52.0 and go.opentelemetry.io/otel v1.41.0
+  (2026-11-14), past the 13 x/crypto advisories and the otel `baggage` one
+  that GitHub reported against v0.48.0 and v1.40.0. It makes test data only,
+  and no build of the Engine nor any CI job compiles it; of x/crypto it
+  compiles `cryptobyte` alone, not the SSH packages the 13 are about. The log
+  in `tests/tlog/tessera` was not made again: a run with the new modules gave
+  the same files but for the witness cosignatures, which carry their time
+  (`tests/VENDORED.md`).
 - `x0ne-engine-proxy` no longer takes a control line it ignores for the
   model key's acceptance (2026-11-10). `x0ne-engine cloud` drives the relay
   with one JSON line per command on its standard input. A line the relay
@@ -102,6 +209,23 @@ the first non-beta tag will freeze the receipt protocol below.
 
 ### Changed
 
+- docs/benchmarks.md and bench/results/README.md say, for the H100 rows
+  before x0ne Core, what docs/hardware-runs.md said of the same runs: from
+  2026-10-18 on, the relay pinned the TEST archive key, which signed each
+  image reference, and on 2026-10-28 and 2026-10-31 the TEST transparency
+  log too. No figure changes.
+- The host sampler's softmax sums with one accumulator in index order on
+  every build (2026-11-14), the sum of candle 0.11.0 on the default x86-64
+  target. A build with the `avx2` target feature took candle's AVX2 sum
+  instead, which rounds differently; no build of the repository sets it, so
+  no draw served moves. candle 0.11.1 picks its sum when it runs, AVX2 on a
+  CPU that has it, and the draws no longer follow candle: its tests compare
+  every step to candle 0.11.1 with the sum candle takes on the host
+  (`draws_are_candles`, `softmax_is_candles`), and new tests pin the draws
+  and probabilities of fixed rows to the digests of the values candle 0.11.0
+  gave (`draws_are_pinned`, `softmax_is_pinned`), each case one that
+  `draws_are_candles` had held equal to candle 0.11.0. A seed signed in a
+  receipt gives the tokens it gave before, whatever the CPU's vector units.
 - The collateral of a verdict is fetched together, not one GET after the
   other (2026-11-10). The relay's verdict asks Intel and Google eight
   things in three round trips: the QE identity alone, whose `Date` header
@@ -162,6 +286,17 @@ the first non-beta tag will freeze the receipt protocol below.
 
 ### Fixed
 
+- SECURITY.md and `deny.toml` said `paste` (RUSTSEC-2024-0436, unmaintained)
+  came only through candle's `gemm`, so into the tests alone (2026-11-14). It
+  also comes through `tokenizers`, a normal dependency of `x0ne-infer`: every
+  build runs it, the image and the .deb included. It is a proc-macro, run by
+  the compiler and not linked into the binaries. Both now say so.
+- FEATURES.md and docs/cloud.md no longer say that no release and no package
+  are published (2026-11-17). v0.2.0-beta.7 carries the client binaries; what
+  is missing is said by name: no VM image is published and no release key is
+  pinned. `tests/doc_claims.rs` holds those texts to the release `install.sh`
+  names. The CHANGELOG and the comments cite no document that is absent from
+  this tree.
 - An answer stops when its caller leaves (2026-11-10). A whole answer was
   generated to its end after its caller hung up; on candle and x0ne Core it
   now stops at the next step (`server::Caller`, set when hyper drops the
@@ -1431,7 +1566,8 @@ history: candle has been the CPU reference of the tests since 2026-11-04.
   (which Core calls; Core's crate needs nvcc and `make ci` does not build
   it), `/v1/decide` with both methods and `/learn`. OLMo 2's role markers
   (`<|user|>`, `<|assistant|>`, `<|system|>`) are plain text in its
-  tokenizer and stay typeable (`docs/lab.md`).
+  tokenizer and stay typeable (said in the lab's document, which left this
+  repository with the lab server).
 
 - `x0ne-engine cloud up` reads the VM's serial console every 15 s until the
   verdict (`instances.getSerialPortOutput`, which needs the IAM permission
@@ -1469,7 +1605,8 @@ history: candle has been the CPU reference of the tests since 2026-11-04.
   that hangs up stops the generation at its next token. Unlike the attested
   server, the lab pads nothing and writes each chunk at once: the size and
   timing of its chunks follow the tokens. It is not confidential, so it has
-  nothing to hide them for (docs/lab.md). The relay's writer of unpadded
+  nothing to hide them for (the lab's document, which left this repository
+  with the lab server, said so). The relay's writer of unpadded
   chunks moved to `sse.rs` and serves both; the generation's end is decided
   by one function for the attested server and the lab (`stream::outcome`).
 - The binaries that ship are stripped by the build, and a comment no longer
@@ -2786,7 +2923,8 @@ On 2026-10-18, when this version's number was set:
   Binary scan: a default release `x0ne-infer` holds none of the route, contract
   or receipt-domain strings; with the feature it holds them. Real OpenJev
   through the confidential path on a local workstation's CPU: 116 ms median over HTTP.
-  Never run on TDX hardware: `docs/decide-manual-test.md` § 5.
+  Never run on TDX hardware (§ 5 of its manual test record, which left this
+  repository with the lab server).
 - `engine-check`/CI: a `confidential-decide` test and clippy step.
 
 ### 2026-09-28 — `decide` feature: decision models (prototype)
@@ -2795,7 +2933,8 @@ On 2026-10-18, when this version's number was set:
   `POST /v1/decide` in `x0ne-infer-lab`. Context, question, 2 to 24 options,
   kind `choice` / `score` / `noul`; answers a distribution, the chosen option
   (always the caller's string, or `null` when abstaining), a confidence and
-  `abstain` under `abstain_below`. Contract and bounds in `docs/decide-api.md`.
+  `abstain` under `abstain_below`. Contract and bounds in its API document
+  (it left this repository with the lab server).
   Absent from `x0ne-infer` (binary scanned for the route and its contract
   marker) and 404 in a lab without `decide`, tested.
 - `method: logprob` (`src/decide.rs`): the served generative model scores each
@@ -2810,7 +2949,7 @@ On 2026-10-18, when this version's number was set:
   refused at load; a caller string carrying a label marker is refused (400).
   Tiny random fixture from gliclass + transformers 5.17 in
   `tests/arch/gliclass/` (`scripts/make-gliclass-fixture.py`).
-- Measured on CPU (`docs/decide-manual-test.md`): encoder within 5.6e-6 of
+- Measured on CPU (its manual test record): encoder within 5.6e-6 of
   Verdict's PyTorch engine on OpenJev over 28 cases; `logprob` 18/23 on
   OLMo-2 1B, 14/23 on Qwen3-0.6B; no answer outside the list.
 - CI: the `lab` job also tests and lints `--features decide`.
@@ -2842,7 +2981,7 @@ On 2026-10-18, when this version's number was set:
   introspection routes in `x0ne-infer-lab` — tokens, embeddings with a stable 2D
   projection, next-token distribution, attention per head, one backward pass
   (loss, per-layer gradient norms, input saliency). Contract and bounds in
-  `docs/learn-api.md`. Same admission as completions, nothing logged, base model
+  its API document (it left this repository with the lab server). Same admission as completions, nothing logged, base model
   only. Absent from `x0ne-infer` and from a lab without `learn` (404), tested.
 - CI: the `lab` job also tests and lints `--features learn`. `Containerfile`:
   `--build-arg LAB_FEATURES="cuda learn"` (default unchanged).
@@ -2853,7 +2992,8 @@ On 2026-10-18, when this version's number was set:
   compute capability 12.0 on CUDA 13.3.1 (cudarc 0.19.9 refuses 13.4),
   distroless runtime, uid 65532, no shell, ~0.8 GB; base images pinned by
   digest. A `confidential` target is defined and has never been built.
-  `docs/container-manual-test.md` is the GPU test procedure.
+  The GPU test procedure was a manual test record (it left this repository
+  with the lab server).
 - CI: a `lab` job (tests and clippy with `not-confidential`) and an `image` job
   that builds the image and runs `x0ne-infer/scripts/image-smoke.sh` without a
   GPU, through NVIDIA's stub libcuda in a CI-only target.

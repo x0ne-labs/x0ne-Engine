@@ -17,7 +17,7 @@
 
 use rsa::pkcs8::DecodePublicKey;
 use rsa::signature::Verifier as _;
-use rsa::RsaPublicKey;
+use rsa::PublicKey as RsaPublicKey;
 use x509_parser::certificate::X509Certificate;
 use x509_parser::oid_registry::{OID_NIST_HASH_SHA256, OID_PKCS1_RSASSAPSS};
 use x509_parser::prelude::FromDer;
@@ -192,8 +192,7 @@ fn pss_verify(
     signature: &[u8],
     what: &str,
 ) -> Result<(), String> {
-    let vk =
-        rsa::pss::VerifyingKey::<rsa::sha2::Sha256>::new_with_salt_len(key.clone(), PSS_SALT_LEN);
+    let vk = rsa::pss::VerifyingKey::<sha2::Sha256>::new_with_salt_len(key.clone(), PSS_SALT_LEN);
     let sig =
         rsa::pss::Signature::try_from(signature).map_err(|e| format!("{what} signature: {e}"))?;
     vk.verify(message, &sig)
@@ -444,7 +443,7 @@ pub(crate) mod tests {
     pub(crate) mod fake_google {
         use rsa::pkcs8::EncodePublicKey as _;
         use rsa::signature::{RandomizedSigner as _, SignatureEncoding as _};
-        use rsa::{BigUint, RsaPrivateKey};
+        use rsa::{BoxedUint, PrivateKey as RsaPrivateKey};
         use sha2::Digest as _;
         use std::sync::OnceLock;
 
@@ -463,35 +462,40 @@ pub(crate) mod tests {
         /// A deterministic source for the PSS salts: SHA-256 over a counter.
         struct Counter(u64);
 
-        impl rsa::rand_core::RngCore for Counter {
-            fn next_u32(&mut self) -> u32 {
-                let mut b = [0; 4];
-                self.fill_bytes(&mut b);
-                u32::from_le_bytes(b)
-            }
-            fn next_u64(&mut self) -> u64 {
-                let mut b = [0; 8];
-                self.fill_bytes(&mut b);
-                u64::from_le_bytes(b)
-            }
-            fn fill_bytes(&mut self, dest: &mut [u8]) {
+        impl Counter {
+            fn fill(&mut self, dest: &mut [u8]) {
                 for chunk in dest.chunks_mut(32) {
                     self.0 += 1;
                     let d = sha2::Sha256::digest(self.0.to_le_bytes());
                     chunk.copy_from_slice(&d[..chunk.len()]);
                 }
             }
-            fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rsa::rand_core::Error> {
-                self.fill_bytes(dest);
+        }
+
+        // rand_core 0.10: an infallible `TryRng` is an `Rng`, and with the marker a `CryptoRng`.
+        impl rsa::rand_core::TryRng for Counter {
+            type Error = std::convert::Infallible;
+            fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+                let mut b = [0; 4];
+                self.fill(&mut b);
+                Ok(u32::from_le_bytes(b))
+            }
+            fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+                let mut b = [0; 8];
+                self.fill(&mut b);
+                Ok(u64::from_le_bytes(b))
+            }
+            fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
+                self.fill(dest);
                 Ok(())
             }
         }
 
-        impl rsa::rand_core::CryptoRng for Counter {}
+        impl rsa::rand_core::TryCryptoRng for Counter {}
 
         fn key(p: &str, q: &str) -> RsaPrivateKey {
-            let n = |h: &str| BigUint::parse_bytes(h.as_bytes(), 16).unwrap();
-            RsaPrivateKey::from_p_q(n(p), n(q), BigUint::from(65_537u32)).unwrap()
+            let n = |h: &str| BoxedUint::from_be_hex(h, 1024).unwrap();
+            RsaPrivateKey::from_p_q(n(p), n(q), BoxedUint::from(65_537u32)).unwrap()
         }
 
         fn der(tag: u8, body: &[u8]) -> Vec<u8> {
@@ -570,7 +574,7 @@ pub(crate) mod tests {
         }
 
         fn pss_sign(key: &RsaPrivateKey, message: &[u8], seed: u64) -> Vec<u8> {
-            rsa::pss::SigningKey::<rsa::sha2::Sha256>::new_with_salt_len(key.clone(), 32)
+            rsa::pss::SigningKey::<sha2::Sha256>::new_with_salt_len(key.clone(), 32)
                 .sign_with_rng(&mut Counter(seed), message)
                 .to_vec()
         }

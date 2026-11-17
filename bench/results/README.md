@@ -63,10 +63,10 @@ summary; no receipt, signature or session key. Its README has the rest.
 | Directory | Machine | What ran |
 |---|---|---|
 | `2026-10-17-h100-tdx-cc/` | GCP `a3-highgpu-1g`, us-central1-a | `qwen3:8b`, TD at 0.2.0-beta.5, 09:39 to 09:45 |
-| `2026-10-18-h100-tdx-cc/` | GCP `a3-highgpu-1g`, us-central1-a | `qwen3:32b`, TD at 0.2.0-beta.7, 17:56 to 17:57 |
-| `2026-10-22-h100-tdx-cc/` | GCP `a3-highgpu-1g`, us-central1-a | `qwen3:8b`, TD from 0.2.0-beta.7 sources of that day, 00:46 to 00:48 |
-| `2026-10-28-h100-tdx-cc/` | GCP `a3-highgpu-1g`, us-east5-a | `ministral3:14b`, TD from 0.2.0-beta.7 sources of that day, 15:22 |
-| `2026-10-31-h100-tdx-cc/` | GCP `a3-highgpu-1g`, us-east5-a | `ministral3:14b`, TD from 0.2.0-beta.7 sources of that day, image x0ne-cvm 0.2.8, RTMR0 pinned: one stream and the session KV cache 07:41 to 07:44, the prompt ladder 07:44 to 07:45 |
+| `2026-10-18-h100-tdx-cc/` | GCP `a3-highgpu-1g`, us-central1-a | `qwen3:32b`, TD at 0.2.0-beta.7, relay pinning the TEST archive key, 17:56 to 17:57 |
+| `2026-10-22-h100-tdx-cc/` | GCP `a3-highgpu-1g`, us-central1-a | `qwen3:8b`, TD from 0.2.0-beta.7 sources of that day, relay pinning the TEST archive key, 00:46 to 00:48 |
+| `2026-10-28-h100-tdx-cc/` | GCP `a3-highgpu-1g`, us-east5-a | `ministral3:14b`, TD from 0.2.0-beta.7 sources of that day, relay pinning the TEST archive key and the TEST transparency log, 15:22 |
+| `2026-10-31-h100-tdx-cc/` | GCP `a3-highgpu-1g`, us-east5-a | `ministral3:14b`, TD from 0.2.0-beta.7 sources of that day, image x0ne-cvm 0.2.8, RTMR0 pinned, relay pinning the TEST archive key and the TEST transparency log: one stream and the session KV cache 07:41 to 07:44, the prompt ladder 07:44 to 07:45 |
 | `2026-11-03-h100-tdx-cc-core/` | GCP `a3-highgpu-1g`, us-east5-a, TDX, GPU in CC mode | x0ne Core alone, its bench and GPU tests, `qwen3:8b`, 23:30 to 23:40 |
 | `2026-11-04-h100-tdx-cc-core-bench/` | GCP `a3-highgpu-1g`, us-east5-a, TDX, GPU in CC mode | x0ne Core alone, its per-token bench, `qwen3:0.6b`, `qwen3:8b`, `qwen3:14b` and `qwen3:32b`, 16:34 to 16:48 |
 | `2026-11-04-h100-tdx-cc-core-e2e/` | GCP `a3-highgpu-1g`, us-east5-a, TDX, GPU in CC mode | this Engine on x0ne Core, image x0ne-cvm 0.2.9, `qwen3:8b` streamed through the relay, a TEST measurement, 15:23 to 15:30 |
@@ -83,7 +83,12 @@ console of the 2026-10-17 and 2026-10-22 runs shows NVIDIA's open kernel
 module 595.91.07 loading (that of 2026-10-18 was lost, that of 2026-10-28 not
 kept with these rows). The relay ran on the operator's machine, in a
 container: built `--release` on 2026-10-17, `--release` with debug
-assertions and `test-archive-key` on the other three days. Every response kept
+assertions and `test-archive-key` on the other four days: it pinned the TEST
+archive key, which signed the image reference of each of those runs (that
+of 2026-10-22 predates the transparency-log check; those of 2026-10-28 and
+2026-10-31 pinned the TEST transparency log too). The client
+of 2026-10-17 predates the reference signature check and took its reference
+unsigned. Every response kept
 here has a receipt the relay verified, naming `cuda:0` in a
 `ConfidentialVmWithGpu` environment (`IntelTdx`, GPU mode `On`).
 

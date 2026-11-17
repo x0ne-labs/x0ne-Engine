@@ -29,7 +29,8 @@ RUN_FILES = ["docs/hardware-runs.md"]
 HEADNOTE = (
     "Not end-to-end confidential: the host still sees timing, sizes and the model name; the "
     "recorded runs pinned a TEST archive key and a TEST transparency log through a relay built "
-    "for tests; no release is published and no external audit has been done. The README's "
+    "for tests; no VM image is published, no release key is pinned and no external audit has been "
+    "done. The README's "
     "[What is left](README.md#what-is-left) is the reference."
 )
 

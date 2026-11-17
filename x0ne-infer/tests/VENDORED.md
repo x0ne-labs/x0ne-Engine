@@ -308,6 +308,19 @@ github.com/transparency-dev/formats v0.1.1 and merkle v0.0.2 (`go.sum`).
 `tests/tlog_interop.rs` reads them with `tlog.rs` and `transparency.rs`.
 The cosignatures carry the time they were made, so a rerun gives other
 cosignature bytes; everything else is the same.
+On 2026-11-17 its `go.mod` moved from golang.org/x/mod v0.36.0 to v0.40.0
+and from golang.org/x/crypto v0.52.0 to v0.59.0, the first versions the Go
+vulnerability database lists nothing against: it listed GO-2026-6179 and
+GO-2026-6180 against x/mod v0.36.0 (`sumdb/tlog`'s tile hash reader and
+`sumdb`'s client, neither called here) and four entries against x/crypto
+v0.52.0, in its `ssh` and `openpgp` packages, which this program does not
+build. x/crypto v0.59.0 requires Go 1.26, so the `go` line went from 1.25.0
+to 1.26.0. The files were not made again. Two runs that day with Go 1.26.11
+(docker.io/library/golang@sha256:dc40a13b61304647ed7e5d581d246b86413dfc29d63c6d018310feb93cd98fc0,
+no network once the modules were fetched), one with the `go.mod` before the
+move and one after, each gave the twelve files kept here byte for byte but
+for the witness cosignature line of `checkpoint-301`, `tlog/checkpoint` and
+`reference-300.json.tlog-proof`.
 
 ```sh
 cd x0ne-infer/tests/tlog/go-src
@@ -331,6 +344,32 @@ strings. Kept: the two checkpoints, the four tiles the proofs need
 2026-10-22 by `tlog/tessera-src/main.go` with Go 1.25.14, offline once the
 modules were fetched; `tests/tlog_interop.rs` reads them with `tlog.rs` and
 `transparency.rs`. No network log, no witness server: a local directory.
+On 2026-11-14 its `go.mod` moved from golang.org/x/crypto v0.48.0 and
+go.opentelemetry.io/otel v1.40.0 to v0.52.0 and v1.41.0 (GitHub security
+advisories); the files were not made again. A run with the new `go.mod` that
+day gave the same files but for the witness cosignature lines, which carry
+their time. On 2026-11-17 it moved again, to go.opentelemetry.io/otel,
+otel/metric and otel/trace v1.47.0 (GHSA-q7gw-24fr-5p69, in otel/trace,
+fixed there). otel v1.47.0 requires Go 1.26, so the `go` line went from
+1.25.0 to 1.26.0, and brings github.com/go-logr/logr v1.4.4 and its sibling
+module go.opentelemetry.io/otel/log v1.47.0, both indirect. The files were
+not made again. Two runs that day with Go 1.26.11
+(docker.io/library/golang@sha256:dc40a13b61304647ed7e5d581d246b86413dfc29d63c6d018310feb93cd98fc0,
+no network once the modules were fetched), one with the `go.mod` before the
+move and one after, each gave the files kept here byte for byte but for one
+line in each of `checkpoint-100`, `log/checkpoint` and
+`r-042.json.tlog-proof`: the witness cosignature, whose time was
+2026-10-22 12:55:09 UTC and is the time of the run. The same day
+golang.org/x/crypto moved from v0.52.0 to v0.59.0 and golang.org/x/mod from
+v0.33.0 to v0.40.0, the first versions the Go vulnerability database lists
+nothing against. It listed four entries against x/crypto v0.52.0, in the
+`ssh` and `openpgp` packages (GO-2026-5932, GO-2026-6303, GO-2026-6354,
+GO-2026-6355), and two against x/mod v0.33.0, in `sumdb` and `sumdb/tlog`
+(GO-2026-6179, GO-2026-6180). This program builds none of those packages:
+`go list -deps .` names `cryptobyte` and `cryptobyte/asn1` of x/crypto and
+`sumdb/note` of x/mod. Nothing else moved in `go.mod`. Runs with the same
+image and no network, before and after each move, gave the same result: the
+three cosignature lines differ, no other byte.
 
 ```sh
 cd x0ne-infer/tests/tlog/tessera-src

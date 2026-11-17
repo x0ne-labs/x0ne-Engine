@@ -62,8 +62,10 @@ must be executable and must not be writable by group or others.
 
 ## Building
 
-No package is published. The three client binaries build from this tree into
-one directory, where `x0ne-engine` finds the other two:
+Each GitHub release, from v0.2.0-beta.7, carries the three client binaries
+prebuilt, for Linux on x86_64 with glibc ([Install](../README.md#install)); no
+VM image is published. They also build from this tree into one directory,
+where `x0ne-engine` finds the other two:
 
 ```sh
 cargo build --locked --release -p x0ne-infer --bin x0ne-engine --bin x0ne-engine-proxy -p x0ne-engine-cloud --bin x0ne-engine-cloud
@@ -76,7 +78,7 @@ workflow does. The release profile keeps symbols and line tables:
 37 MB as built, 5.9, 10.3 and 5.6 MB once `ci/strip-release.sh <debug dir>
 <binary>...` has moved them to debug files, as the packages do (measured on
 2026-11-03, [ci-local.md](ci-local.md#built-from-source)). `make deb` packages them locally, given an x0ne OS checkout
-(`X0NE_OS`, not public yet); nothing is published ([ci-local.md](ci-local.md)).
+(`X0NE_OS`, not public yet); `make deb` publishes nothing ([ci-local.md](ci-local.md)).
 
 ## Usage
 
@@ -128,7 +130,7 @@ x0ne-engine cloud login gcp            gcloud auth login --no-launch-browser
 A first session needs the image and its signed reference. No package installs
 a reference (`ci/deb/*.ctl` here and x0ne-OS `packages/*.ctl`, read on
 2026-10-17; x0ne OS is not public yet). They come together from the `cvm/` directory of an x0ne OS release tree,
-signed by the archive key's subkey (x0ne-OS `docs/archive-key.md`, not public yet):
+signed by the archive key's subkey (x0ne OS's archive key document, not public yet):
 `x0ne-cvm-<V>.tar.gz`, the reference `x0ne-cvm-<V>.json` and its
 `x0ne-cvm-<V>.json.sig`. A reference you build yourself (x0ne-OS `make cvm`, not public yet)
 is not signed by that key, and the relay refuses it (99). No such release
@@ -757,7 +759,7 @@ message, and nothing was created. No flag and no variable skips the check
 its long key ID, the last 16 hex digits of its fingerprint as `gpg
 --keyid-format long` prints them, and the signing date.
 
-The pinned key is the x0ne OS archive key (x0ne-OS `docs/archive-key.md`, not public yet),
+The pinned key is the x0ne OS archive key (x0ne OS's archive key document, not public yet),
 made at the signing ceremony; its public keyring and primary fingerprint are
 written into the source (`x0ne-infer/src/archive_key.rs`, `RELEASE`). A
 release build made before that pins no key: its relay refuses every

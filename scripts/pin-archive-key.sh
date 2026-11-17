@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Pins the x0ne archive key in this tree, after the signing ceremony (x0ne-OS
-# docs/archive-key.md). Copies the PUBLIC keyring to
+# Pins the x0ne archive key in this tree, after the signing ceremony (x0ne OS's
+# archive key document, not public yet). Copies the PUBLIC keyring to
 # x0ne-infer/archive-key/x0ne-archive-keyring.gpg, sets archive_key::RELEASE
 # (include_bytes!), replaces the test that wanted no pin, and rewrites every text
 # that says this tree pins no key: docs/cloud.md, docs/attested-channel.md,

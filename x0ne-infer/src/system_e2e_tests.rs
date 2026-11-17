@@ -1232,7 +1232,8 @@ async fn eight_clients_at_once_on_a_queue_of_two_are_answered_or_told_when_to_co
 /// Past a cap the relay answers and closes with the body unread (RFC 9110
 /// §15.5.14 lets it), and the rest of the body meets the peer's reset. The
 /// answer is already in the client's socket, and Linux keeps it there:
-/// urllib3 reads it after the failed write (its #1524), and so does this.
+/// urllib3 reads it after the failed write (urllib3/urllib3#1524), and so
+/// does this.
 /// hyper's client, reqwest's, returns `BodyWrite` and drops it instead: at
 /// random under load (3 red `make ci` runs on 2026-11-10, broken pipe), and
 /// every time when held so (measured on the relay, 2026-11-10).

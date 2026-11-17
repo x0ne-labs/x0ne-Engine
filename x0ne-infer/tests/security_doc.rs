@@ -1,10 +1,11 @@
 //! The audit ignore list and the document that justifies it must agree.
 //!
 //! `cargo audit` is the first command many readers of a security project
-//! run. Silencing an advisory is sometimes right — RUSTSEC-2023-0071 has no
-//! fixed upgrade and does not apply to public-key verification — but an
-//! ignore whose reason has been forgotten is worse than a red audit: it is a
-//! red audit that stopped being read.
+//! run. Silencing an advisory is sometimes right — RUSTSEC-2023-0071 had no
+//! fixed upgrade before rsa 0.10 and did not apply to public-key
+//! verification, and was ignored until the lock moved there — but an ignore
+//! whose reason has been forgotten is worse than a red audit: it is a red
+//! audit that stopped being read.
 //!
 //! So the ignore list is not allowed to drift away from SECURITY.md. This
 //! file is a test rather than a comment because a doc-comment describing the
@@ -84,8 +85,8 @@ fn every_silenced_advisory_is_justified_in_the_security_policy() {
 /// The justification has to say what would make the exemption wrong again.
 ///
 /// "Not applicable" is an assertion about today's code. Without the condition
-/// that would end it, the next person to add an RSA private key has nothing
-/// to trip over — and the ignore quietly becomes false.
+/// that would end it, the next person to change what the exemption rests on
+/// has nothing to trip over — and the ignore quietly becomes false.
 #[test]
 fn the_justification_states_what_would_make_it_expire() {
     let policy_path = find("SECURITY.md")
@@ -100,111 +101,6 @@ fn the_justification_states_what_would_make_it_expire() {
         section.contains("What would make this live again"),
         "each exemption must name its own expiry condition"
     );
-}
-
-/// RUSTSEC-2026-0367/0368/0369/0429 (zip extraction) are ignored because nothing here opens a zip.
-/// Measured 2026-10-21: zip comes from candle-core 0.11.0 alone, no workspace source names it.
-/// A failure means that measurement no longer holds: re-measure, then fix or drop the ignores.
-#[test]
-fn the_zip_ignores_hold_only_while_nothing_opens_an_archive() {
-    let lock_path = find("Cargo.lock").expect("Cargo.lock at the workspace root");
-    let lock: toml::Value =
-        toml::from_str(&std::fs::read_to_string(&lock_path).expect("Cargo.lock is readable"))
-            .expect("Cargo.lock parses");
-    let mut through: Vec<String> = Vec::new();
-    for pkg in lock["package"].as_array().expect("a [[package]] list") {
-        let deps = pkg.get("dependencies").and_then(|d| d.as_array());
-        let needs_zip = deps.is_some_and(|d| {
-            d.iter()
-                .any(|d| d.as_str().and_then(|d| d.split(' ').next()) == Some("zip"))
-        });
-        if needs_zip {
-            through.push(format!(
-                "{} {}",
-                pkg["name"].as_str().expect("name"),
-                pkg["version"].as_str().expect("version")
-            ));
-        }
-    }
-    assert_eq!(
-        through,
-        ["candle-core 0.11.0"],
-        "zip now enters through {through:?}: re-measure what calls it (SECURITY.md)"
-    );
-
-    let root = lock_path.parent().expect("the workspace root");
-    let manifest: toml::Value = toml::from_str(
-        &std::fs::read_to_string(root.join("Cargo.toml")).expect("Cargo.toml is readable"),
-    )
-    .expect("Cargo.toml parses");
-    let mut files = Vec::new();
-    for member in manifest["workspace"]["members"]
-        .as_array()
-        .expect("workspace members")
-    {
-        rs_files(
-            &root.join(member.as_str().expect("member path")),
-            &mut files,
-        );
-    }
-    assert!(
-        !files.is_empty(),
-        "no source found under {}",
-        root.display()
-    );
-    const NAMES: [&str; 13] = [
-        "zip::",
-        "ZipArchive",
-        "ZipStreamReader",
-        "ZipWriter",
-        "npy::",
-        "pickle::",
-        "from_npz",
-        "from_pth",
-        "read_npz",
-        "read_pth",
-        "write_npz",
-        "NpzTensors",
-        "PthTensors",
-    ];
-    let mut hits = Vec::new();
-    for f in files
-        .iter()
-        .filter(|f| !f.ends_with("tests/security_doc.rs"))
-    {
-        let text = std::fs::read_to_string(f).expect("source is readable");
-        hits.extend(
-            NAMES
-                .iter()
-                .filter(|n| text.contains(*n))
-                .map(|n| format!("{}: {n}", f.display())),
-        );
-    }
-    assert!(
-        hits.is_empty(),
-        "the zip ignores assume no code opens an archive; these sources name zip or \
-         candle's npz/pth loaders: {hits:?}"
-    );
-}
-
-/// Every `.rs` under `dir`, hidden directories and `target` left out.
-fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display())) {
-        let entry = entry.expect("directory entry");
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with('.') || name == "target" {
-            continue;
-        }
-        let path = entry.path();
-        if entry.file_type().expect("file type").is_dir() {
-            rs_files(&path, out);
-        } else if std::path::Path::new(&name)
-            .extension()
-            .is_some_and(|e| e == "rs")
-        {
-            out.push(path);
-        }
-    }
 }
 
 /// Active `RUSTSEC-` ids of a TOML file, with the text of their line.

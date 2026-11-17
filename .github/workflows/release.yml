@@ -42,6 +42,7 @@ jobs:
     permissions:
       contents: read
     steps:
+      # audit, not block: the hosts this job reaches have not been measured.
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
@@ -88,6 +89,7 @@ jobs:
         # Two independent builds; `reproducible` compares them.
         attempt: [first, second]
     steps:
+      # audit, not block: the hosts this job reaches have not been measured.
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
@@ -156,6 +158,7 @@ jobs:
     timeout-minutes: 10
     permissions: {}
     steps:
+      # audit, not block: the hosts this job reaches have not been measured.
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
@@ -184,6 +187,7 @@ jobs:
     permissions:
       contents: read
     steps:
+      # audit, not block: the hosts this job reaches have not been measured.
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
@@ -211,9 +215,27 @@ jobs:
       id-token: write # sign the provenance (Sigstore, GitHub OIDC)
       attestations: write # store the provenance
     steps:
+      # block: only these hosts, port 443. Measured on the release of v0.2.0-beta.7 (run
+      # 42494524964, 2026-11-08, these same action versions): what this job reached, and no
+      # more. Two names change from one run to the next and are written as patterns: the
+      # runner's own service (run-actions-<n>-azure-<region>) and the storage account of the
+      # artifacts (productionresultssa<n>, eleven of them on fifteen runs of this repository).
+      # The agent allows both patterns and StepSecurity's API on its own (agent v0.16.3,
+      # addImplicitEndpoints); they are written here so that the list says all of it.
+      # A host this list lacks fails the job before the draft exists: add it, tag again.
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
-          egress-policy: audit
+          egress-policy: block
+          allowed-endpoints: >-
+            github.com:443
+            api.github.com:443
+            uploads.github.com:443
+            fulcio.sigstore.dev:443
+            rekor.sigstore.dev:443
+            token.actions.githubusercontent.com:443
+            results-receiver.actions.githubusercontent.com:443
+            *.actions.githubusercontent.com:443
+            productionresultssa*.blob.core.windows.net:443
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false

@@ -4,7 +4,12 @@
 version: 2
 updates:
   - package-ecosystem: cargo
-    directory: /
+    # Two workspaces, two locks: the root's and x0ne Core's (x0ne-core/Cargo.lock). One entry
+    # for both: every crate of x0ne Core's lock is in the root's at the same version
+    # (ci/core-cpu.sh refuses otherwise), so a bump has to move the two together.
+    directories:
+      - /
+      - /x0ne-core
     schedule:
       interval: weekly
       day: monday
@@ -30,6 +35,25 @@ updates:
     groups:
       # Actions are pinned by SHA; one PR a week bumps them all together.
       github-actions:
+        patterns: ["*"]
+  - package-ecosystem: gomod
+    # The two Go programs that made the transparency-log test data (x0ne-infer/tests/VENDORED.md):
+    # nothing builds or ships them. A bump moves go.mod and go.sum only; the data is not made
+    # again by it.
+    directories:
+      - /x0ne-infer/tests/tlog/go-src
+      - /x0ne-infer/tests/tlog/tessera-src
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      # One PR a week for the module graphs of the two generators.
+      gomod:
         patterns: ["*"]
   - package-ecosystem: docker
     # Dependabot reads a literal `FROM registry/image:tag@sha256:...` (ci/Containerfile.check,

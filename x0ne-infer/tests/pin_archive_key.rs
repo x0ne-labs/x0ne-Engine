@@ -25,7 +25,7 @@ const EDITED: &[&str] = &[
     "README.md",
 ];
 const RING: &str = "x0ne-infer/archive-key/x0ne-archive-keyring.gpg";
-/// The user ID of the rehearsal key of 2026-10-17 (x0ne-OS docs/archive-key.md).
+/// The user ID of the rehearsal key of 2026-10-17 (x0ne OS's archive key document).
 const REHEARSAL_UID: &str = "x0ne OS archive key REHEARSAL throwaway <rehearsal@x0ne.invalid>";
 
 fn workspace() -> PathBuf {

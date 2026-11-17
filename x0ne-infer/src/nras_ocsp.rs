@@ -47,7 +47,7 @@ use crate::nras::CLOCK_SKEW_SECS;
 use rsa::pkcs1v15::{Signature as RsaSignature, VerifyingKey as RsaVerifyingKey};
 use rsa::pkcs8::DecodePublicKey;
 use rsa::signature::Verifier as _;
-use rsa::RsaPublicKey;
+use rsa::PublicKey as RsaPublicKey;
 use sha2::Digest;
 use x509_parser::asn1_rs::{oid, Any, Class, FromDer, GeneralizedTime, Oid, Tag};
 use x509_parser::oid_registry::{
@@ -678,11 +678,11 @@ fn verify_signature(
             let sig = RsaSignature::try_from(signature)
                 .map_err(|e| bad(format!("RSA signature: {e}")))?;
             let ok = if *alg == OID_PKCS1_SHA256WITHRSA {
-                RsaVerifyingKey::<rsa::sha2::Sha256>::new(key)
+                RsaVerifyingKey::<sha2::Sha256>::new(key)
                     .verify(message, &sig)
                     .is_ok()
             } else if *alg == OID_PKCS1_SHA384WITHRSA {
-                RsaVerifyingKey::<rsa::sha2::Sha384>::new(key)
+                RsaVerifyingKey::<sha2::Sha384>::new(key)
                     .verify(message, &sig)
                     .is_ok()
             } else {
@@ -1553,7 +1553,7 @@ pub(crate) mod tests {
 
     pub(crate) fn rsa_kp() -> KeyPair {
         let mut rng = crate::nras::tests::rsa_test_rng();
-        let sk = rsa::RsaPrivateKey::new(&mut rng, 2048).expect("rsa key");
+        let sk = rsa::PrivateKey::new(&mut rng, 2048).expect("rsa key");
         KeyPair::from_pkcs8_pem_and_sign_algo(
             &crate::nras::tests::rsa_to_pkcs8_pem(&sk),
             &rcgen::PKCS_RSA_SHA256,
