@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The x0ne archive key, pinned in this binary: its signing subkey signs
 //! every image reference the relay accepts. The maintainer generates it
-//! offline (x0ne-OS `docs/archive-key.md`, not public yet); a build carries the public part
+//! offline (x0ne OS's archive key document, not public yet); a build carries the public part
 //! and the primary's fingerprint, and nothing at run time adds a key.
 //!
 //! A build made before the signing ceremony pins no key (`RELEASE` is

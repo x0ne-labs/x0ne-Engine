@@ -6416,7 +6416,7 @@ fn whole_rewrite(rewrite: impl Fn(&mut Value) + Clone + Send + Sync + 'static) -
     }
 }
 
-/// SECURITY (audit of 2026-11-02): what a TD adds to a whole answer, in its receipt or beside
+/// SECURITY (found on 2026-11-02): what a TD adds to a whole answer, in its receipt or beside
 /// it, reaches the client neither whole nor emulated as a stream; the answer stays verified.
 /// A failure: the TD's own word in an answer marked `receipt_verified`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -6445,7 +6445,7 @@ async fn what_a_whole_answers_receipt_does_not_sign_does_not_reach_the_client() 
     stop(up).await;
 }
 
-/// SECURITY (audit of 2026-11-02): a whole answer with a second choice, or a usage that is not
+/// SECURITY (found on 2026-11-02): a whole answer with a second choice, or a usage that is not
 /// its receipt's, is a 502 coded `receipt_verification_failed` quoting nothing of it, and the
 /// relay ends the session (65).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

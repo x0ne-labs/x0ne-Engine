@@ -22,23 +22,37 @@ ships.
 ## Known advisories
 
 `cargo audit` is the first command many readers run, so here is what it said
-and why. Last recorded run: 2026-10-31 (cargo-audit 0.22.2, 1395 advisories,
-416 crates; RustSec database at its commit 2295466 of 2026-10-30, the copy
-the local CI judges against, no fetch that day): no vulnerability, one
-warning (`paste`, below). `cargo deny check` (cargo-deny 0.20.2, same
-database, offline against the vendored crates as `make ci` runs it; policy in
-`deny.toml`: advisories, licenses, bans, sources) passed the same day:
-advisories, bans, licenses and sources ok, 24 duplicate-version warnings;
-offline, it could not read the crates.io index, so that run says nothing
-about yanked crates (383 `index-failure` warnings). On 2026-10-23 the
+and why. Last recorded run: 2026-11-17 (cargo-audit 0.22.2, 1509 advisories,
+391 crates; RustSec database at its commit 02e2517 of 2026-11-15, the copy
+the local CI judges against, no fetch during the run): no vulnerability, one
+warning (`paste`, below). A first run that day reported three,
+RUSTSEC-2026-0523 and RUSTSEC-2026-0524 (`quinn-proto` 0.11.18) and
+RUSTSEC-2026-0538 (`quinn-udp` 0.5.15), entered in the database on
+2026-11-13: the lock moved to `quinn-proto` 0.11.19 and `quinn-udp` 0.5.16
+that day. `quinn` is in `Cargo.lock` and in no build: it is an optional
+dependency of `reqwest` 0.12.28 that no feature of this workspace enables
+(`cargo tree --workspace --all-features --target all -e all -i quinn-proto`
+prints nothing, and nothing for `quinn-udp`, measured the same day), which is
+why `cargo deny check`, which reads the resolved dependency graph, had not
+reported them. `cargo deny check` (cargo-deny 0.20.2, same database, offline
+against the vendored crates as `make ci` runs it; policy in `deny.toml`:
+advisories, licenses, bans, sources) passed the same day: advisories, bans,
+licenses and sources ok, 24 duplicate-version warnings; offline, it could not
+read the crates.io index, so that run says nothing about yanked crates (375
+`index-failure` warnings). On 2026-10-23 the
 database at its commit 6e86877 reported RUSTSEC-2026-0385 (`ctutils` 0.4.2,
 non-constant-time mask generation); the lock moved to `ctutils` 0.4.5 that
 day. On 2026-11-03 `cargo deny check`, online this time (crates.io index read,
 database at its commit 6c5fedf of that day), refused two things:
-`crypto-bigint` 0.7.6, yanked, and RUSTSEC-2026-0429 (`zip`, below). The lock
+`crypto-bigint` 0.7.6, yanked, and RUSTSEC-2026-0429 (`zip` 8.6.0). The lock
 moved to `crypto-bigint` 0.7.10 and `ctutils` 0.4.8, which 0.7.10 requires;
-the advisory is ignored, with the three other `zip` ones; the same online
-check then passed. `cargo deny` runs in CI (the `Security` workflow, on
+the advisory was ignored, with the three other `zip` ones (RUSTSEC-2026-0367,
+0368 and 0369), all four in `zip`'s extraction, which nothing called; the
+same online check then passed. On 2026-11-14 the lock moved to candle
+0.11.1, which requires `zip` ^9.1.3, and to `zip` 9.5.1, where the four are
+fixed: their ignores were removed. `cargo deny check`, offline against the
+vendored crates and the database fetched that day, then passed: advisories,
+bans, licenses and sources ok. `cargo deny` runs in CI (the `Security` workflow, on
 pushes and pull requests to `main` and weekly, and the local `make ci`); no
 CI job runs `cargo audit`. Run them yourself rather than trust this date.
 
@@ -69,8 +83,15 @@ What would make this live again: any code path that decrypts with RSA, signs
 with RSA, or accepts an RSA key from a caller. If you are adding one, remove
 the ignore rather than reasoning about whether it still applies.
 
-**RUSTSEC-2024-0436 — `paste`, unmaintained.** A proc-macro pulled in
-transitively by `gemm`, which candle uses for matrix multiplication. Since
+**RUSTSEC-2024-0436 — `paste`, unmaintained.** A proc-macro: it runs in
+the compiler while the crates that use it are built, and its own code is
+not linked into a binary. Two crates pull it in. `tokenizers`, a normal
+dependency of `x0ne-infer`: every build of `x0ne-infer` runs it, the served
+ones included. The image
+(`cargo tree -e normal -i paste -p x0ne-infer --features "cuda nvml"`) and
+the .deb (`-p x0ne-infer -p x0ne-engine-cloud`, no feature) both reach it
+through `tokenizers` 0.23.2 (measured on 2026-11-14). And `gemm`, which
+candle uses for matrix multiplication. Since
 2026-11-04 candle is the reference of the tests only, on the CPU: the
 feature `candle-reference`, which the tests' dev-dependency turns on and no
 feature of a build reaches, `cuda` included
@@ -82,59 +103,6 @@ for the tests. Not ignored by `cargo audit` (`.cargo/audit.toml`), which
 reports unmaintained crates as warnings, not failures: there the warning
 stays visible. `cargo deny`, the check CI runs, ignores it (`deny.toml`), so
 CI shows nothing for it.
-
-**RUSTSEC-2026-0367, RUSTSEC-2026-0368, RUSTSEC-2026-0369 — `zip` 8.6.0,
-extraction (setuid bits kept, symlinks out of the destination, permissions
-applied through symlinks; fixed in 9.0.0 according to RustSec, in 9.0.1
-according to GHSA-4684-h2q9-2vcp, the GitHub advisory behind
-RUSTSEC-2026-0369).**
-Ignored in `.cargo/audit.toml` and `deny.toml`, and this is the reason. All
-three are in the code that writes an archive's entries to disk:
-`ZipArchive::extract`, `ZipArchive::extract_unwrapped_root_dir` (both
-through `extract_internal`, `read.rs` lines 298 and 360 of the vendored
-8.6.0) and `ZipStreamReader::extract`. In that version, every
-`set_permissions`, `symlink` and directory creation of the reading side is
-reached from these two paths only. `zip` reaches this workspace through
-`candle-core` 0.11.0 only, which requires `zip` ^8.6 and does not make it
-optional; 0.11.0 is candle's latest release (crates.io, 2026-10-21).
-candle-core opens zip archives in `npy.rs` (npz files) and `pickle.rs`
-(PyTorch checkpoints) with `ZipArchive::new`, `by_index` and `by_name`,
-writes npz files with `ZipWriter`, and never extracts. No crate of this
-workspace calls `zip`, `candle_core::npy`, `candle_core::pickle`, nor
-`VarBuilder::from_npz` or `from_pth`, and the catalog refuses pickle
-checkpoints (`registry/catalog.rs`): only safetensors weights are loaded.
-Measured on 2026-10-17 by grep of the three crates and of the vendored
-candle-core, candle-nn and candle-transformers 0.11.0, and by `nm` on every
-binary of the workspace (debug, default and all features): the only `zip`
-symbols are those of `zip::result::ZipError`, which candle's `Error` wraps;
-no `ZipArchive`, no `ZipStreamReader`, no candle npy or pickle function.
-Measured again on 2026-10-21, by the same grep and by `nm` on the debug and
-release binaries that `make ci` builds: same result. The test
-`the_zip_ignores_hold_only_while_nothing_opens_an_archive`
-(`x0ne-infer/tests/security_doc.rs`) fails if `zip` gains a dependent other
-than candle-core 0.11.0, or if a source of the workspace names `zip`, an
-archive type, or candle's npz and PyTorch loaders. Since 2026-11-04
-candle-core is in the tests only (above).
-
-What would make this live again: a call to `ZipArchive::extract`,
-`ZipArchive::extract_unwrapped_root_dir` or `ZipStreamReader::extract`, to
-candle's npy or pickle loaders, or a candle-core release that calls them.
-Re-examine by 2026-11-17, or when a candle-core release accepts `zip` 9.0.1
-or later: upgrade then, and remove the three ignores.
-
-**RUSTSEC-2026-0429 — `zip` 8.6.0, `ZipArchive::extract` aborts the process
-on a symlink entry with a large declared size (denial of service, fixed in
-9.0.0).** Ignored in `.cargo/audit.toml` and `deny.toml`, for the reason of
-the three above. The allocation it describes, a symlink target's buffer sized
-from the size the archive declares, is in `extract_internal` (`read.rs` line
-417 of the vendored 8.6.0) and in `ZipStreamReader::extract`
-(`read/stream.rs` line 72): the same paths, which nothing in this workspace
-calls (measured by grep of the vendored crate, 2026-11-03), and the same test
-fails if a source of the workspace starts to name them.
-
-What would make this live again: what would make the three above live, a
-call to either extraction path. Re-examine by 2026-11-17 with them, and
-remove the four ignores together.
 
 ## Scope notes for researchers
 

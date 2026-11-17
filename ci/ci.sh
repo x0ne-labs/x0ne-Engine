@@ -133,7 +133,7 @@ LATEST=latest$VSUF.json
 X0NE_OS=${X0NE_OS:-}
 DEB_STAGING=${DEB_STAGING:-$CI_CACHE/staging}
 # The release never builds in a target or sccache that make ci or run-fixtures write: a build.rs,
-# a test or the run-fixtures example could leave there what the .deb ships (audit of 2026-10-15).
+# a test or the run-fixtures example could leave there what the .deb ships (found on 2026-10-15).
 DEB_TARGET=${DEB_TARGET:-$CI_CACHE/deb-target}
 mkdir -p "$OUT" "$CI_CACHE"/{target,vendor,cargo-home,logs,src,deb,v2/src,v2/target,v2/stage} "$(dirname "$LOCK")"
 

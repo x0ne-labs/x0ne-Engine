@@ -85,13 +85,13 @@ rcgen = "0.14.9"
 libloading = { version = "0.9", optional = true }
 # candle 0.11, the reference of the tests on the CPU (feature `candle-reference`):
 # never in `cuda`, never in a release build (`tests/served_build.rs`).
-candle-core = { version = "0.11.0", optional = true }
+candle-core = { version = "0.11.1", optional = true }
 # The one candle already uses: shard headers checked (`shards.rs`), `merge-shards`.
 safetensors = "0.8"
 # Read-only maps of the weight files (`fsread::map_capped`); already in the lock through candle.
 memmap2 = "0.9"
-candle-nn = { version = "0.11.0", optional = true }
-candle-transformers = { version = "0.11.0", optional = true }
+candle-nn = { version = "0.11.1", optional = true }
+candle-transformers = { version = "0.11.1", optional = true }
 tokenizers = "0.23.1"
 # The draws of `sampler.rs`: candle 0.11's StdRng and WeightedIndex, the rand
 # candle already uses (no crate added to the lock).

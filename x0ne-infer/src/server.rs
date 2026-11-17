@@ -47,9 +47,8 @@ pub struct ServerState {
     /// at most. Before 2026-08-22 there was no ceiling at all: `max_tokens`
     /// went straight from the request body into the generation loop, so a
     /// single POST asking for a billion tokens held a billed H100 for as long
-    /// as it took. The owner named unbounded spend the model's
-    /// number-one risk on 2026-08-21; this is that risk at the layer this
-    /// crate owns.
+    /// as it took. An unbounded completion is unbounded spend on a GPU billed
+    /// by the hour; this is that risk at the layer this crate owns.
     ///
     /// Clamped, not refused: `max_tokens` means "at most" in every
     /// OpenAI-compatible client, and the answer carries
@@ -1813,8 +1812,8 @@ pub(crate) mod tests {
     /// hardware. A failure anywhere here is a failure of the real path.
     /// The prompt handed to the model is the model's OWN chat template.
     ///
-    /// A failure here is what the owner met on real hardware on 2026-08-21:
-    /// the model continued his sentence instead of answering it and ran to
+    /// A failure here is what a session on real hardware showed on 2026-08-21:
+    /// the model continued the sentence instead of answering it and ran to
     /// the token ceiling, because `role: content` never produces the
     /// `<|im_end|>` the stop tokens wait for. Two properties: the turn
     /// markers are present, and a caller cannot forge an `assistant` turn by
@@ -2158,9 +2157,9 @@ pub(crate) mod tests {
     ///
     /// Until 2026-08-22 `max_tokens` went from the request body straight into
     /// the generation loop, so one POST asking for a billion tokens held a
-    /// billed H100 for as long as it took. The owner named unbounded
-    /// spend the model's number-one risk; a client must not be able to write
-    /// the number that costs money.
+    /// billed H100 for as long as it took. An unbounded completion is
+    /// unbounded spend on a GPU billed by the hour; a client must not be able
+    /// to write the number that costs money.
     ///
     /// A failure here means the clamp is gone and a single request can run
     /// the meter for as long as it likes.

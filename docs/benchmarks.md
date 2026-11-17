@@ -165,6 +165,14 @@ build of x0ne-cvm, the GPU in confidential computing mode. Each run is a new
 VM, so possibly another host. [hardware-runs.md](hardware-runs.md) records the
 attestation side of each run; this table is its speed side.
 
+From 2026-10-18 on, the relay of these runs was built `--release` with debug
+assertions and `test-archive-key`: it pinned the TEST archive key, which
+signed the image reference of each run. The run of 2026-10-22 (71.17 and
+66.96 tok/s below) predates the transparency-log check; those of 2026-10-28
+and 2026-10-31 pinned the TEST transparency log too. The
+client of 2026-10-17 predates the reference signature check and took its
+reference unsigned.
+
 | Date | Zone | Model | Engine in the TD | n | Decode, 20-token prompt, 256 tokens | Decode after the long prompt | First token, 20-token prompt | First token, long prompt | Rows |
 |---|---|---|---|---|---|---|---|---|---|
 | 2026-10-17 | us-central1-a | `qwen3:8b` | 0.2.0-beta.5 sources | 3 | 42.51 tok/s [42.48, 42.56] | not isolated | 0.140 s | not measured | [`2026-10-17-h100-tdx-cc`](../bench/results/2026-10-17-h100-tdx-cc/) |

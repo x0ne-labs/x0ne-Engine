@@ -1,11 +1,18 @@
 //! Token draws on the host, without candle.
 //!
-//! For one seed, [`Sampler`] draws the tokens candle 0.11's `LogitsProcessor`
-//! draws: the same `StdRng` and `WeightedIndex` of rand 0.9, the temperature
-//! and the softmax in f32 in candle's order of operations (affine
-//! `v * (1 / t) + 0`, sequential max, `exp`, candle's sum, division). The
-//! tests prove it against candle, kept as the reference. A seed signed in a
-//! receipt therefore gives the tokens it gave before.
+//! For one seed, [`Sampler`] draws the tokens candle 0.11.0's
+//! `LogitsProcessor` drew on the default x86-64 target: the same `StdRng` and
+//! `WeightedIndex` of rand 0.9, the temperature and the softmax in f32 in
+//! candle's order of operations (affine `v * (1 / t) + 0`, sequential max,
+//! `exp`, a sum with one accumulator in index order, division).
+//!
+//! That sum is fixed, on every build and every CPU. candle 0.11.1 picks its
+//! own when it runs (AVX2 lanes on a CPU that has them, which rounds
+//! differently), and the draws here do not follow it. The tests prove every
+//! step against candle 0.11.1, kept as the reference, with the sum candle
+//! picks on the host in place of this one; and they pin the draws and the
+//! probabilities of fixed rows to the values candle 0.11.0 gave. A seed signed
+//! in a receipt therefore gives the tokens it gave before.
 //!
 //! What is faster without changing a draw: candle sorts the whole vocabulary
 //! (151,936 entries for Qwen3) for each `top_p` token. Here only the nucleus
@@ -41,6 +48,8 @@ pub struct Sampler {
     prs: Vec<f32>,
     /// Vocabulary indices, reused by the nucleus selection.
     order: Vec<u32>,
+    /// The softmax's sum: [`seq_sum`]. Only the tests put candle's in.
+    sum: fn(&[f32]) -> f32,
 }
 
 impl Sampler {
@@ -65,6 +74,7 @@ impl Sampler {
             draw,
             prs: Vec::new(),
             order: Vec::new(),
+            sum: seq_sum,
         }
     }
 
@@ -83,13 +93,13 @@ impl Sampler {
             Draw::ArgMax => crate::stepped::argmax(row)
                 .ok_or_else(|| anyhow::anyhow!("the logits hold a NaN: no token")),
             Draw::All { temperature } => {
-                softmax_into(row, temperature, &mut self.prs);
+                softmax_into(row, temperature, self.sum, &mut self.prs);
                 let d =
                     WeightedIndex::new(&self.prs).map_err(|e| anyhow::anyhow!("sampling: {e}"))?;
                 to_token(d.sample(&mut self.rng))
             }
             Draw::TopP { p, temperature } => {
-                softmax_into(row, temperature, &mut self.prs);
+                softmax_into(row, temperature, self.sum, &mut self.prs);
                 let kept = nucleus(&self.prs, p as f32, &mut self.order);
                 // Index order: candle's cumulative sums, without its zeros.
                 kept.sort_unstable();
@@ -105,8 +115,9 @@ fn to_token(i: usize) -> anyhow::Result<u32> {
     u32::try_from(i).map_err(|_| anyhow::anyhow!("sampling: index {i} past u32"))
 }
 
-/// candle 0.11: `(&logits / t)` is `affine(1 / t, 0)`, then `softmax_last_dim`.
-fn softmax_into(row: &[f32], temperature: f64, prs: &mut Vec<f32>) {
+/// candle 0.11: `(&logits / t)` is `affine(1 / t, 0)`, then `softmax_last_dim`,
+/// with `sum` for its sum ([`seq_sum`] in every draw served).
+fn softmax_into(row: &[f32], temperature: f64, sum: fn(&[f32]) -> f32, prs: &mut Vec<f32>) {
     let mul = (1.0 / temperature) as f32;
     let add = 0.0f32;
     prs.clear();
@@ -118,47 +129,18 @@ fn softmax_into(row: &[f32], temperature: f64, prs: &mut Vec<f32>) {
     for d in prs.iter_mut() {
         *d = (*d - max).exp();
     }
-    let sum = candle_sum(prs);
+    let total = sum(prs);
     for d in prs.iter_mut() {
-        *d /= sum;
+        *d /= total;
     }
 }
 
-/// candle-core 0.11 `cpu::vec_sum`, x86 without AVX2 (the default target):
-/// one accumulator, in index order.
-#[cfg(not(all(
-    any(target_arch = "x86", target_arch = "x86_64"),
-    target_feature = "avx2"
-)))]
-fn candle_sum(xs: &[f32]) -> f32 {
+/// The sum of every draw served: candle-core 0.11.0's `cpu::vec_sum` on the
+/// default x86-64 target (no AVX2), one accumulator in index order. It does
+/// not depend on the CPU's vector units nor on the build's target features.
+fn seq_sum(xs: &[f32]) -> f32 {
     let mut b = 0f32;
     for &x in xs {
-        b += x;
-    }
-    b
-}
-
-/// candle-core 0.11 `cpu::vec_sum` with AVX2 (`cpu/avx.rs`): 4 registers of
-/// 8 lanes over blocks of 32, reduced by its fixed tree, then the remainder.
-#[cfg(all(
-    any(target_arch = "x86", target_arch = "x86_64"),
-    target_feature = "avx2"
-))]
-fn candle_sum(xs: &[f32]) -> f32 {
-    let np = xs.len() & !31;
-    let mut acc = [0f32; 32];
-    for block in xs[..np].chunks_exact(32) {
-        for (a, &x) in acc.iter_mut().zip(block) {
-            *a += x;
-        }
-    }
-    let mut r = [0f32; 8];
-    for (l, v) in r.iter_mut().enumerate() {
-        *v = (acc[l] + acc[8 + l]) + (acc[16 + l] + acc[24 + l]);
-    }
-    let t0 = [r[0] + r[4], r[1] + r[5], r[2] + r[6], r[3] + r[7]];
-    let mut b = (t0[0] + t0[1]) + (t0[2] + t0[3]);
-    for &x in &xs[np..] {
         b += x;
     }
     b
@@ -238,8 +220,45 @@ mod tests {
     use super::*;
     use candle_core::{Device, Tensor};
 
+    /// candle-core 0.11's `cpu::vec_sum` with AVX2 (`cpu/avx.rs`): 4 registers
+    /// of 8 lanes over blocks of 32, reduced by its fixed tree, then the
+    /// remainder in index order.
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    fn avx2_sum(xs: &[f32]) -> f32 {
+        let (blocks, rest) = xs.as_chunks::<32>();
+        let mut acc = [0f32; 32];
+        for block in blocks {
+            for (a, &x) in acc.iter_mut().zip(block) {
+                *a += x;
+            }
+        }
+        let mut r = [0f32; 8];
+        for (l, v) in r.iter_mut().enumerate() {
+            *v = (acc[l] + acc[8 + l]) + (acc[16 + l] + acc[24 + l]);
+        }
+        let t0 = [r[0] + r[4], r[1] + r[5], r[2] + r[6], r[3] + r[7]];
+        let mut b = (t0[0] + t0[1]) + (t0[2] + t0[3]);
+        for &x in rest {
+            b += x;
+        }
+        b
+    }
+
+    /// The sum candle 0.11.1's softmax takes on this host: it asks the CPU
+    /// for AVX2 when it runs (`cpu::use_avx2`, `is_x86_feature_detected!`).
+    /// Only x86 is reproduced here, not candle's NEON sum on Arm.
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    fn candles_sum() -> fn(&[f32]) -> f32 {
+        if std::is_x86_feature_detected!("avx2") {
+            avx2_sum
+        } else {
+            seq_sum
+        }
+    }
+
     /// candle's draw: the processor Engine used before this module
     /// (`candle_backend::logits_processor`), on a CPU tensor.
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     fn candle_draws(s: Sampling, rows: &[Vec<f32>]) -> Vec<u32> {
         let mut p = crate::candle_backend::logits_processor(s);
         rows.iter()
@@ -250,9 +269,30 @@ mod tests {
             .collect()
     }
 
+    /// The draws served.
     fn our_draws(s: Sampling, rows: &[Vec<f32>]) -> Vec<u32> {
         let mut p = Sampler::new(s);
         rows.iter().map(|r| p.sample(r).unwrap()).collect()
+    }
+
+    /// The draws with `sum` in the softmax in place of [`seq_sum`].
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    fn draws_with(s: Sampling, sum: fn(&[f32]) -> f32, rows: &[Vec<f32>]) -> Vec<u32> {
+        let mut p = Sampler::new(s);
+        p.sum = sum;
+        rows.iter().map(|r| p.sample(r).unwrap()).collect()
+    }
+
+    /// FNV-1a over the little-endian bytes of 32-bit words.
+    fn fnv(words: impl IntoIterator<Item = u32>) -> u64 {
+        let mut h = 0xcbf2_9ce4_8422_2325u64;
+        for w in words {
+            for b in w.to_le_bytes() {
+                h ^= u64::from(b);
+                h = h.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        }
+        h
     }
 
     /// A deterministic row: `n` logits from a xorshift, spread by `scale`,
@@ -274,9 +314,13 @@ mod tests {
         r
     }
 
-    /// Bit for bit candle's draws: every mapping of the parameters, peaked and
-    /// flat rows, ties, the Qwen3 vocabulary size; 40 tokens per seed on the
-    /// small rows, 4 on the large ones.
+    /// Bit for bit candle's draws, with the sum candle takes on this host in
+    /// the softmax: on a CPU without AVX2 that is the sampler served, with
+    /// AVX2 every step of it but the sum (`draws_are_pinned` holds the sum).
+    /// Every mapping of the parameters, peaked and flat rows, ties, the Qwen3
+    /// vocabulary size; 40 tokens per seed on the small rows, 4 on the large
+    /// ones.
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     #[test]
     fn draws_are_candles() {
         let mut checked = 0;
@@ -312,7 +356,7 @@ mod tests {
                         seed,
                     };
                     assert_eq!(
-                        our_draws(s, &rows),
+                        draws_with(s, candles_sum(), &rows),
                         candle_draws(s, &rows),
                         "n {n} scale {scale} ties {ties} t {temperature} top_p {top_p} seed {seed}"
                     );
@@ -336,7 +380,7 @@ mod tests {
             (65, 1.0, 0.5),
         ] {
             let mut prs = Vec::new();
-            softmax_into(&row(n, 7, scale, 0), 1.0, &mut prs);
+            softmax_into(&row(n, 7, scale, 0), 1.0, seq_sum, &mut prs);
             // candle's sample_topp, minus the draw.
             let mut idx: Vec<usize> = (0..n).collect();
             idx.sort_by(|&i, &j| prs[j].total_cmp(&prs[i]));
@@ -355,7 +399,84 @@ mod tests {
         }
     }
 
-    /// The softmax is candle's, value for value.
+    /// The draws served, pinned on every host: the digest of the tokens
+    /// candle 0.11.0 drew for these rows. Its sum was [`seq_sum`] on the
+    /// default target, and `draws_are_candles` held the two equal until
+    /// candle 0.11.1. No change of candle, rand, the build or the CPU moves a
+    /// draw a receipt signed without failing here.
+    #[test]
+    fn draws_are_pinned() {
+        #[rustfmt::skip]
+        let cases: &[(usize, f32, usize, f64, f64, u64, u64)] = &[
+            // (n, scale, ties, temperature, top_p, seed, digest of the draws)
+            (151_936, 30.0, 0, 0.7, 0.9, 299_792_458, 0x0161_32ed_e21c_77ed),
+            (151_936, 8.0, 0, 1.0, 1.5, 1, 0x0022_0c7b_e37d_71a2),
+            (151_936, 2.0, 3, 1.3, 0.5, 0, 0xf132_a04e_f8d9_6538),
+            (1_000, 1.0, 0, 0.7, 1.0, 0, 0x14fa_4537_13c2_1473),
+            (1_000, 1.0, 0, 2.0, 0.999, 299_792_458, 0xf46c_9833_cc3a_f2c2),
+            (33, 4.0, 2, 1.0, 0.95, 1, 0x1c77_f3c4_e037_8b06),
+            (33, 4.0, 2, 0.2, 0.05, 0, 0x81b1_69c3_31ca_bfa5),
+            (7, 0.0, 7, 0.7, 0.9, 1, 0xe28c_e642_16f1_8287),
+        ];
+        let mut wrong = Vec::new();
+        for &(n, scale, ties, temperature, top_p, seed, want) in cases {
+            let tokens = if n > 10_000 { 4 } else { 40 };
+            let rows: Vec<Vec<f32>> = (0..tokens)
+                .map(|k| row(n, k as u64 + 1, scale, ties))
+                .collect();
+            let s = Sampling {
+                temperature,
+                top_p,
+                seed,
+            };
+            let got = fnv(our_draws(s, &rows));
+            if got != want {
+                wrong.push(format!(
+                    "({n}, {scale:?}, {ties}, {temperature:?}, {top_p:?}, {seed}, {got:#018x}),"
+                ));
+            }
+        }
+        assert!(wrong.is_empty(), "draws moved:\n{}", wrong.join("\n"));
+    }
+
+    /// The probabilities served, pinned bit for bit on every host: the digest
+    /// of candle 0.11.0's softmax of these rows (see `draws_are_pinned`).
+    #[test]
+    fn softmax_is_pinned() {
+        let mut wrong = Vec::new();
+        for (n, scale, t, want) in [
+            (151_936usize, 20.0f32, 0.7f64, 0xd200_0655_c16a_a23du64),
+            (1_000, 3.0, 1.3, 0xf161_45a4_414a_690b),
+            (5, 0.0, 1.0, 0xe5ce_5c30_8045_0922),
+        ] {
+            let mut prs = Vec::new();
+            softmax_into(&row(n, 3, scale, 0), t, seq_sum, &mut prs);
+            let got = fnv(prs.iter().map(|p| p.to_bits()));
+            if got != want {
+                wrong.push(format!("({n}, {scale:?}, {t:?}, {got:#018x}),"));
+            }
+        }
+        assert!(wrong.is_empty(), "softmax moved:\n{}", wrong.join("\n"));
+    }
+
+    /// The pins see a change of sum: candle's AVX2 sum moves the digest of
+    /// the large row's probabilities.
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[test]
+    fn the_pins_see_the_avx2_sum() {
+        let r = row(151_936, 3, 20.0, 0);
+        let (mut seq, mut avx2) = (Vec::new(), Vec::new());
+        softmax_into(&r, 0.7, seq_sum, &mut seq);
+        softmax_into(&r, 0.7, avx2_sum, &mut avx2);
+        assert_ne!(
+            fnv(seq.iter().map(|p| p.to_bits())),
+            fnv(avx2.iter().map(|p| p.to_bits()))
+        );
+    }
+
+    /// The softmax is candle's, value for value, with the sum candle takes on
+    /// this host.
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     #[test]
     fn softmax_is_candles() {
         for (n, scale, t) in [
@@ -365,7 +486,7 @@ mod tests {
         ] {
             let r = row(n, 3, scale, 0);
             let mut ours = Vec::new();
-            softmax_into(&r, t, &mut ours);
+            softmax_into(&r, t, candles_sum(), &mut ours);
             let logits = (Tensor::from_slice(&r, n, &Device::Cpu).unwrap() / t).unwrap();
             let theirs: Vec<f32> = candle_nn::ops::softmax_last_dim(&logits)
                 .unwrap()
@@ -413,7 +534,9 @@ mod tests {
     }
 
     /// Release build (`--ignored --nocapture`): time per draw, candle and here,
-    /// on the Qwen3 vocabulary. Same tokens checked on the way.
+    /// on the Qwen3 vocabulary. Same tokens checked on the way, with candle's
+    /// sum of the host.
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     #[test]
     #[ignore = "timing: cargo test --release -p x0ne-infer sampler::tests::speed -- --ignored --nocapture"]
     fn speed() {
@@ -430,7 +553,8 @@ mod tests {
             let t1 = std::time::Instant::now();
             let ours = our_draws(s, &rows);
             let here = t1.elapsed().as_secs_f64() / rows.len() as f64;
-            assert_eq!(ours, theirs);
+            assert_eq!(draws_with(s, candles_sum(), &rows), theirs);
+            assert_eq!(ours.len(), theirs.len());
             println!(
                 "MEASURE sampler t {temperature} top_p {top_p}: candle {:.1} us, here {:.1} us per token ({:.1}x)",
                 candle * 1e6,

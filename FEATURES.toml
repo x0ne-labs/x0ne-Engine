@@ -641,7 +641,7 @@ version = "0.2.0-beta.2"
 title_en = "The release ships the verified path only"
 sentence_en = "The release archive ships the client of the verified path only: the command line, the cloud tool and the relay."
 proof = "CHANGELOG 2026-10-13 (no SSH in the release); CHANGELOG 0.2.0-beta.7 (the x0ne-infer package, 2026-11-04); tests/cloud_source_sweep.rs"
-limit = "No release has been published. The server is not in it: it ships in the confidential VM's image only."
+limit = "The server is not in the release: it ships in the confidential VM's image only, and no image is published."
 
 [[feature]]
 id = "reproducible-deb"
@@ -826,7 +826,7 @@ title_en = "1,355 tests, 92.58 % line coverage, in a local CI"
 sentence_en = "cargo test -p x0ne-infer passes 1,355 tests; make ci adds every feature, strict lints and licence and advisory checks; 92.58 % line coverage."
 figure = "1,355 tests, 92.58 % of x0ne-infer's lines"
 proof = "README (1355 tests pass, 33 ignored, in the CI image, 2026-11-04); make coverage on 2026-11-04 (ci/coverage-baseline.json: x0ne-infer 92.58 % of lines); CHANGELOG 0.2.0-beta.7 (make coverage, CI entries); CHANGELOG 2026-08-22 (CI)"
-limit = "cargo deny, not cargo audit; deny.toml ignores paste and four zip advisories, to re-examine by 2026-11-17. x0ne Core, compiled with cuda only, is in neither this count nor this coverage."
+limit = "cargo deny, not cargo audit; deny.toml ignores paste, which cargo audit reports as a warning (SECURITY.md, 2026-11-17). x0ne Core, compiled with cuda only, is in neither this count nor this coverage."
 
 [[feature]]
 id = "public-claims-held-by-tests"
@@ -936,7 +936,7 @@ level = "planned"
 order = 2
 title_en = "A release key, a signed distribution, a published image"
 sentence_en = "Planned: the archive key's signing ceremony, then signed binaries and a published VM image you can pin."
-proof = "README (What is left); CHANGELOG 0.2.0-beta.5 (RELEASE is None); x0ne-OS (not public yet) docs/archive-key.md and the keygen rehearsal"
+proof = "README (What is left); CHANGELOG 0.2.0-beta.5 (RELEASE is None); x0ne-OS (not public yet) archive key document and the keygen rehearsal"
 limit = "Until then every reference, image and measurements file is TEST."
 
 [[feature]]

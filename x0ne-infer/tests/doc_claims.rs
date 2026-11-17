@@ -470,6 +470,30 @@ fn the_ueid_binding_is_not_described_as_never_exercised() {
     assert!(!flat(&read("x0ne-infer/THREAT_MODEL.md")).contains(stale));
 }
 
+/// `install.sh` installs the release its `VERSION` line names, and the README
+/// says each GitHub release carries the client binaries. Until 2026-11-17
+/// FEATURES.md and docs/cloud.md still said that nothing was published.
+#[test]
+fn no_text_says_nothing_is_published_while_the_installer_names_a_release() {
+    let installer = read("install.sh");
+    assert!(
+        installer.lines().any(|l| l.starts_with("VERSION=\"0.")),
+        "install.sh names no release any more: update this test"
+    );
+    let mut texts = documents();
+    for rel in ["FEATURES.md", "FEATURES.toml", "ci/features.py"] {
+        texts.push((workspace().join(rel), flat(&read(rel))));
+    }
+    for (path, text) in &texts {
+        for what in ["release", "package"] {
+            for verb in ["is published", "has been published"] {
+                let stale = format!("no {what} {verb}");
+                assert!(!text.contains(&stale), "{}: {stale}", path.display());
+            }
+        }
+    }
+}
+
 /// Open WebUI 0.12.3, in its default Native function calling, sends `tools`
 /// with a plain chat; the relay applies the server's rule and answers 400.
 /// docs/api.md names the Legacy setting exactly while that refusal stands.

@@ -3029,7 +3029,7 @@ mod tests {
             assert_eq!(whole_answer(&st, &cut, &asked).unwrap(), cut);
         }
 
-        /// SECURITY (audit of 2026-11-02): a field added in the receipt is outside the signed
+        /// SECURITY (found on 2026-11-02): a field added in the receipt is outside the signed
         /// bytes, one added elsewhere outside the receipt. Neither goes out; the receipt that
         /// does still verifies. A failure: the TD's own word in an answer marked verified.
         #[test]
@@ -3065,7 +3065,7 @@ mod tests {
             assert!(receipt::verify_signed_payload(&payload, &receipt));
         }
 
-        /// SECURITY (audit of 2026-11-02): the receipt signs one text. Two choices, or none,
+        /// SECURITY (found on 2026-11-02): the receipt signs one text. Two choices, or none,
         /// are refused as a receipt that does not verify, quoting nothing. A failure: an
         /// unchecked text beside the verified one.
         #[test]
@@ -3091,7 +3091,7 @@ mod tests {
             }
         }
 
-        /// SECURITY (audit of 2026-11-02): the usage is the receipt's token counts. A whole
+        /// SECURITY (found on 2026-11-02): the usage is the receipt's token counts. A whole
         /// answer whose usage says otherwise, or nothing, is refused, as a stream's usage chunk is.
         #[test]
         fn a_whole_answer_whose_usage_is_not_the_receipts_is_refused() {

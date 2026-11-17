@@ -331,6 +331,11 @@ strings. Kept: the two checkpoints, the four tiles the proofs need
 2026-10-22 by `tlog/tessera-src/main.go` with Go 1.25.14, offline once the
 modules were fetched; `tests/tlog_interop.rs` reads them with `tlog.rs` and
 `transparency.rs`. No network log, no witness server: a local directory.
+On 2026-11-14 its `go.mod` moved from golang.org/x/crypto v0.48.0 and
+go.opentelemetry.io/otel v1.40.0 to v0.52.0 and v1.41.0 (GitHub security
+advisories); the files were not made again. A run with the new `go.mod` that
+day gave the same files but for the witness cosignature lines, which carry
+their time.
 
 ```sh
 cd x0ne-infer/tests/tlog/tessera-src
